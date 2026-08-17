@@ -196,6 +196,16 @@ public class SMSService {
 			return false;
 		}
 
+		if (config.providerType() == SmsProviderType.CONSOLE) {
+			log.info(
+					"[DEV SMS] org={} to={} vars={} (no real SMS sent — CONSOLE provider is for local development only)",
+					orgId,
+					mobileNumber,
+					variables
+			);
+			return true;
+		}
+
 		String templateId = templateResolver.apply(config);
 
 		if (!hasText(templateId)) {

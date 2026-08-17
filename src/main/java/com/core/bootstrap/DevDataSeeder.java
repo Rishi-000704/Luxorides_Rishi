@@ -23,12 +23,14 @@ import com.core.models.embedded.Money;
 import com.core.models.embedded.Name;
 import com.core.models.Package;
 import com.core.models.Passenger;
+import com.core.models.SmsProviderConfig;
 import com.core.models.enums.AccountType;
 import com.core.models.enums.Authority;
 import com.core.models.enums.DutyType;
 import com.core.models.enums.OrgStatus;
 import com.core.models.enums.OwnershipType;
 import com.core.models.enums.PackageScope;
+import com.core.models.enums.SmsProviderType;
 import com.core.models.enums.VehicleStatus;
 import com.core.repositories.*;
 
@@ -50,6 +52,7 @@ public class DevDataSeeder implements CommandLineRunner {
 	private final PassengerRepository passengerRepository;
 	private final DriverRepository driverRepository;
 	private final CityGarageRepository garageRepository;
+	private final SmsProviderConfigRepository smsProviderConfigRepository;
 	private final Test test;
 
 	@Override
@@ -60,6 +63,12 @@ public class DevDataSeeder implements CommandLineRunner {
 		if (!seedEnabled) {
 			return;
 		}
+
+		// Runs on every startup (not gated by the "already seeded" check below) so a
+		// dev environment always has a working, non-real OTP path — otherwise OTP
+		// login is unusable locally without real SMS gateway credentials.
+		seedConsoleSmsProviderIfMissing("demo");
+		seedConsoleSmsProviderIfMissing("luxorides");
 
 		// 🚫 Already seeded → exit
 		if (orgRepository.count() > 0) {
@@ -84,6 +93,25 @@ public class DevDataSeeder implements CommandLineRunner {
 		}
 
 		System.out.println("✅ Fleetovo dummy data seeded successfully");
+	}
+
+	/**
+	 * Dev-only: without this, OTP login (client and driver) is unusable locally
+	 * because no real MSG91 credentials exist for the seeded orgs. CONSOLE just
+	 * logs the OTP instead of sending a real SMS -- see SMSService#send.
+	 */
+	private void seedConsoleSmsProviderIfMissing(String orgId) {
+		if (smsProviderConfigRepository.findByOrgIdAndProviderType(orgId, SmsProviderType.CONSOLE).isPresent()) {
+			return;
+		}
+
+		SmsProviderConfig config = new SmsProviderConfig();
+		config.setOrgId(orgId);
+		config.setProviderType(SmsProviderType.CONSOLE);
+		config.setActive(true);
+		config.setDefaultConfig(true);
+		config.setDisplayName("Local dev console (no real SMS)");
+		smsProviderConfigRepository.save(config);
 	}
 
 	private void seedGarage() {

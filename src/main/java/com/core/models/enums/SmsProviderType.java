@@ -5,5 +5,11 @@ public enum SmsProviderType {
     TWILIO,
     GUPSHUP,
     TEXTLOCAL,
-    AWS_SNS
+    AWS_SNS,
+
+    /**
+     * Dev/local-only: logs the message instead of calling a real gateway.
+     * Never send real SMS. See SMSService#send.
+     */
+    CONSOLE
 }
