@@ -15,8 +15,10 @@ import com.core.models.Driver;
 public interface DriverRepository extends JpaRepository<Driver, String> {
 	
 	Optional<Driver> findByIdAndOrgId(String id, String orgId);
-	
+
 	Driver findByPhoneAndOrgId(String phone, String orgId);
+
+	Optional<Driver> findByUserId(String userId);
 
 	List<Driver> findByOrgId(String orgId);
 

@@ -75,7 +75,66 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 		String driverId,
 		List<DutyStatus> statuses
 	);
-	
+
+	/* -------------------------------------------------
+	   Driver self-service dashboard (driver/app)
+	   ------------------------------------------------- */
+
+	@Query("""
+			SELECT e
+			FROM BookingEntry e
+			JOIN FETCH e.booking b
+			LEFT JOIN FETCH b.client
+			LEFT JOIN FETCH e.allotedVehicle fv
+			LEFT JOIN FETCH fv.masterVehicle
+			WHERE b.orgId = :orgId
+			  AND e.driverId = :driverId
+			  AND e.status IN :statuses
+			ORDER BY e.reportingTime ASC
+		""")
+	Page<BookingEntry> findActiveDutiesForDriver(
+		@Param("orgId") String orgId,
+		@Param("driverId") String driverId,
+		@Param("statuses") List<DutyStatus> statuses,
+		Pageable pageable
+	);
+
+	@Query("""
+			SELECT e
+			FROM BookingEntry e
+			JOIN FETCH e.booking b
+			LEFT JOIN FETCH b.client
+			LEFT JOIN FETCH e.allotedVehicle fv
+			LEFT JOIN FETCH fv.masterVehicle
+			WHERE b.orgId = :orgId
+			  AND e.driverId = :driverId
+			  AND e.status = :status
+			ORDER BY e.dropTime DESC
+		""")
+	Page<BookingEntry> findCompletedDutiesForDriver(
+		@Param("orgId") String orgId,
+		@Param("driverId") String driverId,
+		@Param("status") DutyStatus status,
+		Pageable pageable
+	);
+
+	@Query("""
+			SELECT e
+			FROM BookingEntry e
+			JOIN FETCH e.booking b
+			LEFT JOIN FETCH b.client
+			LEFT JOIN FETCH e.allotedVehicle fv
+			LEFT JOIN FETCH fv.masterVehicle
+			WHERE b.orgId = :orgId
+			  AND e.driverId = :driverId
+			  AND e.dutyId = :dutyId
+		""")
+	Optional<BookingEntry> findForDriverSelf(
+		@Param("orgId") String orgId,
+		@Param("driverId") String driverId,
+		@Param("dutyId") String dutyId
+	);
+
 	/* -------------------------------------------------
 	   Driver Link
 	   ------------------------------------------------- */

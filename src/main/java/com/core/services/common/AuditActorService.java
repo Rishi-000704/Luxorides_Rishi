@@ -7,9 +7,11 @@ import com.core.dtos.auth.AuditActorDTO;
 import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
 import com.core.models.Client;
+import com.core.models.Driver;
 import com.core.models.Employee;
 import com.core.models.User;
 import com.core.repositories.ClientRepository;
+import com.core.repositories.DriverRepository;
 import com.core.repositories.EmployeeRepository;
 import com.core.repositories.UserRepository;
 
@@ -22,6 +24,7 @@ public class AuditActorService {
 	private final UserRepository userRepo;
 	private final EmployeeRepository employeeRepo;
 	private final ClientRepository clientRepo;
+	private final DriverRepository driverRepo;
 
 	@Transactional(readOnly = true)
 	public AuditActorDTO resolve(String userId) {
@@ -40,6 +43,10 @@ public class AuditActorService {
 		case CLIENT -> {
 			Client c = clientRepo.findByUserId(userId);
 			yield new AuditActorDTO(userId, c != null ? c.getName().getDisplayName() : "Unknown Client", "CLIENT");
+		}
+		case DRIVER -> {
+			Driver d = driverRepo.findByUserId(userId).orElse(null);
+			yield new AuditActorDTO(userId, d != null ? d.getName().getDisplayName() : "Unknown Driver", "DRIVER");
 		}
 		};
 	}

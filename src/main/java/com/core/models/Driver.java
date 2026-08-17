@@ -43,6 +43,8 @@ public class Driver extends AuditableEntity {
 	private String orgId;
 	@Column(length = 40)
 	private String clientId;
+	@Column(length = 40)
+	private String userId;
 	@Embedded
 	@AttributeOverrides({
 			@AttributeOverride(name = "salutation", column = @Column(name = "name_salutation", length = 10)),

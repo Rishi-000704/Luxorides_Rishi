@@ -20,6 +20,9 @@ import com.core.config.OtpAuthenticationToken;
 import com.core.dtos.auth.ClientOtpRequest;
 import com.core.dtos.auth.ClientOtpResponse;
 import com.core.dtos.auth.ClientOtpVerifyRequest;
+import com.core.dtos.auth.DriverOtpRequest;
+import com.core.dtos.auth.DriverOtpResponse;
+import com.core.dtos.auth.DriverOtpVerifyRequest;
 import com.core.dtos.auth.EmployeeLoginRequest;
 import com.core.dtos.auth.EmployeeMeResponse;
 import com.core.dtos.auth.LoginResponse;
@@ -29,12 +32,14 @@ import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
 import com.core.models.Client;
+import com.core.models.Driver;
 import com.core.models.Employee;
 import com.core.models.User;
 import com.core.models.UserOtp;
 import com.core.models.enums.AccountType;
 import com.core.models.enums.Authority;
 import com.core.repositories.ClientRepository;
+import com.core.repositories.DriverRepository;
 import com.core.repositories.EmployeeRepository;
 import com.core.repositories.UserOtpRepository;
 import com.core.repositories.UserRepository;
@@ -48,6 +53,7 @@ public class AuthenticationService {
 	private final UserRepository userRepository;
 	private final ClientRepository clientRepository;
 	private final EmployeeRepository employeeRepository;
+	private final DriverRepository driverRepository;
 	private final PasswordEncoder passwordEncoder;
 	private final JwtService jwtService;
 	private final AuthenticationManager authenticationManager;
@@ -58,13 +64,15 @@ public class AuthenticationService {
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 	public AuthenticationService(UserRepository userRepository, ClientRepository clientRepository,
-			EmployeeRepository employeeRepository, PasswordEncoder passwordEncoder, JwtService jwtService,
+			EmployeeRepository employeeRepository, DriverRepository driverRepository,
+			PasswordEncoder passwordEncoder, JwtService jwtService,
 			AuthenticationManager authenticationManager, UserOtpRepository userOtpRepository, SMSService smsService,
 			FileService fileService) {
 		super();
 		this.userRepository = userRepository;
 		this.clientRepository = clientRepository;
 		this.employeeRepository = employeeRepository;
+		this.driverRepository = driverRepository;
 		this.passwordEncoder = passwordEncoder;
 		this.jwtService = jwtService;
 		this.authenticationManager = authenticationManager;
@@ -75,23 +83,53 @@ public class AuthenticationService {
 
 	@Transactional
 	public ClientOtpResponse generateOtp(ClientOtpRequest request) {
-		UserOtp local = this.userOtpRepository.findByPhone(request.mobileNumber());
+		issueOtp(request.orgId(), request.mobileNumber());
+		return new ClientOtpResponse(true, "OTP sent and valid for 10 min.", 600);
+	}
+
+	/*
+	 * Driver OTP login. Unlike the client flow, a Driver record must already
+	 * exist (created by ops staff via DriverController) — there is no
+	 * driver self-signup. This keeps drivers a company-managed record, matching
+	 * how DriverController/DriverService already work.
+	 */
+	@Transactional
+	public DriverOtpResponse generateDriverOtp(DriverOtpRequest request) {
+		if (!hasText(request.orgId())) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "Organization is required to send OTP.");
+		}
+
+		Driver driver = this.driverRepository.findByPhoneAndOrgId(request.mobileNumber(), request.orgId());
+		if (driver == null) {
+			throw new NotFoundException(ErrorCode.DRIVER_NOT_FOUND,
+					"No driver is registered with this mobile number. Contact your dispatcher.");
+		}
+
+		issueOtp(request.orgId(), request.mobileNumber());
+		return new DriverOtpResponse(true, "OTP sent and valid for 10 min.", 600);
+	}
+
+	/*
+	 * Shared OTP-issuance step behind both generateOtp (client) and
+	 * generateDriverOtp — same UserOtp table/SMS provider, just reused instead
+	 * of re-implemented per account type.
+	 */
+	private String issueOtp(String orgId, String mobileNumber) {
+		UserOtp local = this.userOtpRepository.findByPhone(mobileNumber);
 		if (local != null) {
 			this.userOtpRepository.delete(local);
 		}
 		String otp = generate6DigitOtp();
 		UserOtp record = new UserOtp();
-		record.setPhone(request.mobileNumber());
+		record.setPhone(mobileNumber);
 		record.setOtpHash(this.passwordEncoder.encode(otp));
 		this.userOtpRepository.save(record);
 
-		if (!hasText(request.orgId())) {
+		if (!hasText(orgId)) {
 			throw new BusinessException(ErrorCode.BAD_REQUEST, "Organization is required to send OTP.");
 		}
 
-		String mobile = request.mobileNumber();
-
-		boolean sent = this.smsService.sendOtp(request.orgId(), mobile, otp, "10");
+		boolean sent = this.smsService.sendOtp(orgId, mobileNumber, otp, "10");
 
 		if (!sent) {
 			this.userOtpRepository.delete(record);
@@ -101,7 +139,7 @@ public class AuthenticationService {
 			);
 		}
 
-		return new ClientOtpResponse(true, "OTP sent and valid for 10 min.", 600);
+		return otp;
 	}
 
 	@Transactional
@@ -153,6 +191,68 @@ public class AuthenticationService {
 	public Client clientme(Authentication authentication) {
 		User user = (User) authentication.getPrincipal();
 		return this.clientRepository.findByPhoneAndOrgId(user.getPhone(), user.getOrgId());
+	}
+
+	@Transactional
+	public LoginResponse verifyDriverOtp(DriverOtpVerifyRequest request) {
+		UserOtp record = this.userOtpRepository.findByPhone(request.mobileNumber());
+		if (record == null) {
+			throw new BusinessException(ErrorCode.OTP_NOT_INITIATED, "No OTP request found for this number");
+		} else if (record.isExpired()) {
+			throw new BusinessException(ErrorCode.OTP_EXPIRED, "OTP has expired");
+		} else if (!this.passwordEncoder.matches(request.otp(), record.getOtpHash())) {
+			record.setAttemptCount(record.getAttemptCount() + 1);
+			if (record.getAttemptCount() > 3) {
+				this.userOtpRepository.deleteById(record.getId());
+				throw new BusinessException(ErrorCode.OTP_MAX_ATTEMPTS_EXCEEDED, "Maximum OTP attempts exceeded",
+						Map.of("maxAttempts", 3));
+			}
+			this.userOtpRepository.save(record);
+			throw new BusinessException(ErrorCode.OTP_INVALID, "Invalid OTP",
+					Map.of("attempt", record.getAttemptCount()));
+		}
+
+		this.userOtpRepository.deleteById(record.getId());
+
+		Driver driver = this.driverRepository.findByPhoneAndOrgId(request.mobileNumber(), request.orgId());
+		if (driver == null) {
+			throw new NotFoundException(ErrorCode.DRIVER_NOT_FOUND,
+					"No driver is registered with this mobile number. Contact your dispatcher.");
+		}
+
+		User user = this.userRepository
+				.findByPhoneAndOrgIdAndAccountType(request.mobileNumber(), request.orgId(), AccountType.DRIVER)
+				.orElse(null);
+		if (user == null) {
+			user = new User();
+			user.setAccountType(AccountType.DRIVER);
+			user.setOrgId(request.orgId());
+			user.setPhone(request.mobileNumber());
+			user = this.userRepository.save(user);
+		}
+
+		if (driver.getUserId() == null) {
+			driver.setUserId(user.getId());
+			this.driverRepository.save(driver);
+		}
+
+		OtpAuthenticationToken authToken = new OtpAuthenticationToken(user);
+		SecurityContextHolder.getContext().setAuthentication(authToken);
+
+		LoginResponse response = new LoginResponse();
+		response.setToken(this.jwtService.generateToken(user));
+		return response;
+	}
+
+	@Transactional(readOnly = true)
+	public Driver driverme(Authentication authentication) {
+		if (authentication == null) {
+			throw new AuthenticationCredentialsNotFoundException("Authentication required");
+		}
+		User user = (User) authentication.getPrincipal();
+		return this.driverRepository.findByUserId(user.getId())
+				.orElseThrow(() -> new NotFoundException(ErrorCode.DRIVER_NOT_FOUND,
+						"Driver record not found for this account"));
 	}
 
 	@Transactional(readOnly = true)

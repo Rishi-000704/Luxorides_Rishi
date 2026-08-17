@@ -27,6 +27,10 @@ public class SecurityContextUtil {
     public boolean isEmployee() {
         return currentUser().getAccountType() == AccountType.EMPLOYEE;
     }
+
+    public boolean isDriver() {
+        return currentUser().getAccountType() == AccountType.DRIVER;
+    }
     
     public String userId() {
     	return currentUser().getId();
