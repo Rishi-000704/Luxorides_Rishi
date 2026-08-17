@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+	margin: 0;
+	padding: 0;
+	font-family: 'Montserrat', Arial, sans-serif;
+	background-color: #f7f9fc;
+	color: #1a1a1a;
+}
+
+.container {
+	max-width: 600px;
+	margin: 20px auto;
+	background: #ffffff;
+	border-radius: 8px;
+	overflow: hidden;
+	border: 1px solid #eeeeee;
+}
+
+.header {
+	background-color: #073b4c;
+	color: #ffffff;
+	text-align: center;
+	padding: 30px 20px;
+}
+
+.content {
+	padding: 25px;
+}
+
+.table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 25px;
+}
+
+.table td {
+	padding: 12px 15px;
+	border: 1px solid #dddddd;
+	font-size: 14px;
+}
+
+.label {
+	background-color: #f4f6f8;
+	font-weight: 700;
+	width: 35%;
+	color: #073b4c;
+}
+
+.section-title {
+	font-size: 18px;
+	color: #073b4c;
+	border-bottom: 2px solid #073b4c;
+	padding-bottom: 8px;
+	margin: 25px 0 15px 0;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.btn {
+	display: inline-block;
+	padding: 15px 35px;
+	background-color: #073b4c;
+	color: #ffffff;
+	text-decoration: none;
+	border-radius: 6px;
+	font-weight: 700;
+	margin-top: 20px;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+	font-size: 14px;
+}
+
+.footer {
+	background-color: #f4f6f8;
+	padding: 30px 20px;
+	text-align: center;
+	border-top: 1px solid #dddddd;
+}
+</style>
+</head>
+<body>
+	<div class="container">
+		<div class="header">
+			<h1 style="margin: 0; font-size: 24px;">Booking Cancelled</h1>
+		</div>
+		<div class="content">
+			<p>
+				Dear <strong th:text="${data.clientName}">Mr. John Doe</strong>,
+			</p>
+			<p>This is to confirm that the booking referenced below has been
+				cancelled. The details are provided for your records.</p>
+			<div
+				style="background: #fdf2f2; border: 1px solid #fbd5d5; padding: 15px; border-radius: 4px; margin: 20px 0;">
+				<p style="margin: 0; font-size: 14px;">
+					<strong>Reason for Cancellation:</strong><br />
+					<span th:text="${data.cancellationReson}">As per client request</span>
+				</p>
+			</div>
+			<h2 class="section-title">Cancelled Itinerary Details</h2>
+
+				<div
+				style="border: 1px solid #eee; padding: 15px; border-radius: 6px; background: #fdfdfd; margin-bottom: 20px;"
+				th:each="duty : ${data.duties}"
+				>
+				<p style="margin: 0; font-size: 14px; line-height: 1.6;">
+					<strong>Duty <span th:text="${duty.dutyId}">#1</span> :</strong> 
+					<span th:text="${duty.vehicleName}">Premium Sedan</span> <br />
+					<span  th:text="${duty.reportingDate}">Oct 25, 2024 | 08:30 AM</span> <br />
+					<span  th:text="${duty.reportingLocation}">IGI Airport, Terminal 3</span>
+				</p>
+			</div>			
+
+			<div style="text-align: center;">
+				<a href="https://www.luxorides.com/app" class="btn">Visit App</a>
+			</div>
+		</div>
+		<div class="footer">
+			<p style="font-size: 14px; color: #666;">
+				For any assistance, reach us at <strong style="color: #073b4c;">+91-9506090609</strong>
+				| <strong style="color: #073b4c;">support@luxorides.com</strong>
+			</p>
+			<p style="font-size: 11px; color: #999; margin-top: 20px;">This
+				is an automated message. Replies to this email are not monitored.</p>
+		</div>
+	</div>
+</body>
+</html>

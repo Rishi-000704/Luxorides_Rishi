@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+	margin: 0;
+	padding: 0;
+	font-family: 'Montserrat', Arial, sans-serif;
+	background-color: #f7f9fc;
+	color: #1a1a1a;
+}
+
+.container {
+	max-width: 600px;
+	margin: 20px auto;
+	background: #ffffff;
+	border-radius: 8px;
+	overflow: hidden;
+	border: 1px solid #eeeeee;
+}
+
+.header {
+	background-color: #073b4c;
+	color: #ffffff;
+	text-align: center;
+	padding: 30px 20px;
+}
+
+.content {
+	padding: 25px;
+}
+
+.table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 20px;
+}
+
+.table td {
+	padding: 12px 15px;
+	border: 1px solid #eeeeee;
+	font-size: 14px;
+}
+
+.label {
+	font-weight: 700;
+	color: #073b4c;
+	width: 35%;
+	background: #f9fafb;
+}
+
+.section-title {
+	font-size: 18px;
+	color: #073b4c;
+	border-bottom: 2px solid #073b4c;
+	padding-bottom: 8px;
+	margin: 30px 0 15px 0;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+}
+
+.btn {
+	display: inline-block;
+	padding: 15px 35px;
+	background-color: #073b4c;
+	color: #ffffff;
+	text-decoration: none;
+	border-radius: 6px;
+	font-weight: 700;
+	margin-top: 20px;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+}
+
+.footer {
+	background-color: #f4f6f8;
+	padding: 30px 20px;
+	text-align: center;
+	border-top: 1px solid #dddddd;
+}
+</style>
+</head>
+<body>
+	<div class="container">
+		<div class="header">
+			<h1 style="margin: 0; font-size: 24px;">Duty Completed</h1>
+		</div>
+		<div class="content">
+			<p>
+				Dear <strong th:text="${data.clientName}">Mr. John Doe</strong>,
+			</p>
+			<p>The duty associated with your booking has been completed. A
+				summary of the trip and final billing details are provided below for
+				your reference.</p>
+			<table class="table">
+				<tr>
+					<td class="label">Duty ID</td>
+					<td th:text="${data.dutyId}">DTY-4001</td>
+				</tr>
+				<tr>
+					<td class="label">Booking ID</td>
+					<td th:text="${data.bookingId}">BK-2024-00125</td>
+				</tr>
+			</table>
+			<h2 class="section-title">Trip Summary</h2>
+			<table class="table">
+				<tr>
+					<td class="label">Starting Time (Garage Out)</td>
+					<td th:text="${data.startingTime}">Oct 25, 2024 | 08:30 AM</td>
+				</tr>
+				<tr>
+					<td class="label">Reporting Time</td>
+					<td th:text="${data.reportingTime}">Oct 25, 2024 | 12:30 PM</td>
+				</tr>
+				<tr>
+					<td class="label">Drop Time</td>
+					<td th:text="${data.dropTime}">Oct 25, 2024 | 08:30 AM</td>
+				</tr>
+				<tr>
+					<td class="label">Closing Time (Garage In)</td>
+					<td th:text="${data.closingTime}">Oct 25, 2024 | 12:30 PM</td>
+				</tr>
+				<tr>
+					<td class="label">Total Distance</td>
+					<td th:text="${data.totalDistance}">55 km</td>
+				</tr>
+			</table>
+			<div style="text-align: center;">
+				<a href="https://app.luxorides.com" class="btn">View in App</a>
+			</div>
+		</div>
+		<div class="footer">
+			<p style="font-size: 14px; color: #666;">
+				For any assistance, reach us at <strong style="color: #073b4c;">+91-9506090609</strong>
+				| <strong style="color: #073b4c;">support@luxorides.com</strong>
+			</p>
+			<p style="font-size: 11px; color: #999; margin-top: 20px;">This
+				is an automated message. Replies to this email are not monitored.</p>
+		</div>
+	</div>
+</body>
+</html>

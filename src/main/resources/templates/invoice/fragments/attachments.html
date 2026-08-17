@@ -1,0 +1,44 @@
+<th:block th:fragment="invoiceAttachments(attachments)">
+
+    <th:block th:if="${attachments != null and !attachments.isEmpty()}">
+
+        <div class="page-break-before"
+             style="width: 100%; box-sizing: border-box; padding-top: 10px;">
+
+            <h2 style="font-size: 18px; margin: 0 0 6px 0; text-align: center;">
+                Invoice Attachments
+            </h2>
+
+            <p style="font-size: 10px; margin: 0 0 14px 0; text-align: center; color: #555;">
+                Duty slips and extra charge slips attached with this invoice.
+            </p>
+
+            <th:block th:each="attachment, stat : ${attachments}">
+
+                <div th:classappend="${stat.index > 0} ? 'page-break-before' : ''"
+                     style="width: 100%; min-height: 950px; box-sizing: border-box; padding-top: 8px;">
+
+                    <div style="border: 1px solid #ddd; padding: 10px; margin-bottom: 12px; background: #f7f7f7;">
+                        <div style="font-size: 14px; font-weight: 700;" th:text="${attachment.title}">
+                            Slip
+                        </div>
+
+                        <div style="font-size: 11px; color: #555; margin-top: 3px;" th:text="${attachment.subtitle}">
+                            Duty details
+                        </div>
+                    </div>
+
+                    <div style="width: 100%; text-align: center;">
+                        <img th:src="${attachment.imageUri}"
+                             style="max-width: 100%; max-height: 860px; border: 1px solid #ddd;" />
+                    </div>
+
+                </div>
+
+            </th:block>
+
+        </div>
+
+    </th:block>
+
+</th:block>

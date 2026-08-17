@@ -1,0 +1,366 @@
+package com.core.services.common;
+
+import java.io.IOException;
+import java.security.SecureRandom;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.core.config.OtpAuthenticationToken;
+import com.core.dtos.auth.ClientOtpRequest;
+import com.core.dtos.auth.ClientOtpResponse;
+import com.core.dtos.auth.ClientOtpVerifyRequest;
+import com.core.dtos.auth.EmployeeLoginRequest;
+import com.core.dtos.auth.EmployeeMeResponse;
+import com.core.dtos.auth.LoginResponse;
+import com.core.dtos.config.EmployeeRequest;
+import com.core.dtos.config.UpdatePasswordRequest;
+import com.core.exception.BusinessException;
+import com.core.exception.ErrorCode;
+import com.core.exception.NotFoundException;
+import com.core.models.Client;
+import com.core.models.Employee;
+import com.core.models.User;
+import com.core.models.UserOtp;
+import com.core.models.enums.AccountType;
+import com.core.models.enums.Authority;
+import com.core.repositories.ClientRepository;
+import com.core.repositories.EmployeeRepository;
+import com.core.repositories.UserOtpRepository;
+import com.core.repositories.UserRepository;
+import com.core.services.JwtService;
+import com.core.util.AddressUtil;
+import com.core.dtos.config.EmployeeListItem;
+
+@Service
+public class AuthenticationService {
+
+	private final UserRepository userRepository;
+	private final ClientRepository clientRepository;
+	private final EmployeeRepository employeeRepository;
+	private final PasswordEncoder passwordEncoder;
+	private final JwtService jwtService;
+	private final AuthenticationManager authenticationManager;
+	private final UserOtpRepository userOtpRepository;
+	private final SMSService smsService;
+	private final FileService fileService;
+
+	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+	public AuthenticationService(UserRepository userRepository, ClientRepository clientRepository,
+			EmployeeRepository employeeRepository, PasswordEncoder passwordEncoder, JwtService jwtService,
+			AuthenticationManager authenticationManager, UserOtpRepository userOtpRepository, SMSService smsService,
+			FileService fileService) {
+		super();
+		this.userRepository = userRepository;
+		this.clientRepository = clientRepository;
+		this.employeeRepository = employeeRepository;
+		this.passwordEncoder = passwordEncoder;
+		this.jwtService = jwtService;
+		this.authenticationManager = authenticationManager;
+		this.userOtpRepository = userOtpRepository;
+		this.smsService = smsService;
+		this.fileService = fileService;
+	}
+
+	@Transactional
+	public ClientOtpResponse generateOtp(ClientOtpRequest request) {
+		UserOtp local = this.userOtpRepository.findByPhone(request.mobileNumber());
+		if (local != null) {
+			this.userOtpRepository.delete(local);
+		}
+		String otp = generate6DigitOtp();
+		UserOtp record = new UserOtp();
+		record.setPhone(request.mobileNumber());
+		record.setOtpHash(this.passwordEncoder.encode(otp));
+		this.userOtpRepository.save(record);
+
+		if (!hasText(request.orgId())) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "Organization is required to send OTP.");
+		}
+
+		String mobile = request.mobileNumber();
+
+		boolean sent = this.smsService.sendOtp(request.orgId(), mobile, otp, "10");
+
+		if (!sent) {
+			this.userOtpRepository.delete(record);
+			throw new BusinessException(
+					ErrorCode.BAD_REQUEST,
+					"Unable to send OTP. SMS provider is not configured for this organization."
+			);
+		}
+
+		return new ClientOtpResponse(true, "OTP sent and valid for 10 min.", 600);
+	}
+
+	@Transactional
+	public LoginResponse verifyOtp(ClientOtpVerifyRequest request) {
+		UserOtp record = this.userOtpRepository.findByPhone(request.mobileNumber());
+		if (record == null) {
+			throw new BusinessException(ErrorCode.OTP_NOT_INITIATED, "No OTP request found for this number");
+		} else if (record.isExpired()) {
+			throw new BusinessException(ErrorCode.OTP_EXPIRED, "OTP has expired");
+		} else if (!this.passwordEncoder.matches(request.otp(), record.getOtpHash())) {
+			record.setAttemptCount(record.getAttemptCount() + 1);
+			if (record.getAttemptCount() > 3) {
+				this.userOtpRepository.deleteById(record.getId());
+				throw new BusinessException(ErrorCode.OTP_MAX_ATTEMPTS_EXCEEDED, "Maximum OTP attempts exceeded",
+						Map.of("maxAttempts", 3));
+			}
+			this.userOtpRepository.save(record);
+			throw new BusinessException(ErrorCode.OTP_INVALID, "Invalid OTP",
+					Map.of("attempt", record.getAttemptCount()));
+		} else {
+			userOtpRepository.deleteById(record.getId());
+			Client localClient = this.clientRepository.findByPhoneAndOrgId(request.mobileNumber(), request.orgId());
+			User localUser = this.userRepository
+					.findByPhoneAndOrgIdAndAccountType(request.mobileNumber(), request.orgId(), AccountType.CLIENT)
+					.orElse(null);
+			if (localClient == null && localUser == null) {
+				localUser = this.saveUser(request);
+				localClient = this.saveClient(request, localUser.getId());
+			} else if (localClient == null && localUser != null) {
+				localClient = this.saveClient(request, localUser.getId());
+			} else if (localClient != null && localUser == null) {
+				localUser = this.saveUser(request);
+				localClient.setUserId(localUser.getId());
+				this.clientRepository.save(localClient);
+			}
+
+			OtpAuthenticationToken authToken = new OtpAuthenticationToken(localUser);
+
+			SecurityContextHolder.getContext().setAuthentication(authToken);
+
+			LoginResponse response = new LoginResponse();
+			response.setToken(this.jwtService.generateToken(localUser));
+			return response;
+		}
+
+	}
+
+	@Transactional(readOnly = true)
+	public Client clientme(Authentication authentication) {
+		User user = (User) authentication.getPrincipal();
+		return this.clientRepository.findByPhoneAndOrgId(user.getPhone(), user.getOrgId());
+	}
+
+	@Transactional(readOnly = true)
+	public LoginResponse authenticateEmployee(EmployeeLoginRequest request) {
+		Employee emp = this.employeeRepository.findByEmail(request.username());
+		if (emp == null) {
+			emp = this.employeeRepository.findByPhone(request.username());
+			if (emp == null) {
+				throw new NotFoundException(ErrorCode.EMPLOYEE_NOT_FOUND, "Employee not found");
+			}
+		}
+		User user = this.getUser(emp.getOrgId(), emp.getUserId());
+		if (this.passwordEncoder.matches(request.password(), user.getPassword())) {
+			UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(user.getId(),
+					request.password());
+			authenticationManager.authenticate(token);
+			LoginResponse response = new LoginResponse();
+			response.setToken(this.jwtService.generateToken(user));
+			return response;
+		} else {
+			throw new BusinessException(ErrorCode.INVALID_CREDENTIALS, "Invalid username or password");
+		}
+	}
+
+	@Transactional(readOnly = true)
+	public EmployeeMeResponse employeeme(Authentication authentication) {
+		if (authentication != null) {
+			User user = (User) authentication.getPrincipal();
+			Employee employee = this.employeeRepository.findByUserId(user.getId());
+			return new EmployeeMeResponse(
+					employee.getId(),
+					employee.getOrgId(),
+					employee.getUserId(),
+					employee.getName(),
+					employee.getEmail(),
+					employee.getPhone(),
+					employee.getAddress(),
+					employee.getPic(),
+					user.getAuthorityList(),
+					employee.getCreatedAt(),
+					employee.getUpdatedAt(),
+					employee.getCreatedBy(),
+					employee.getUpdatedBy()
+			);
+		} else {
+			throw new AuthenticationCredentialsNotFoundException("Authentication required");
+		}
+	}
+
+	@Transactional
+	public Employee updatePassword(String orgId, String userId, UpdatePasswordRequest request) {
+		User user = this.getUser(orgId, userId);
+		if (this.passwordEncoder.matches(request.oldPassword(), user.getPassword())
+				&& request.oldPassword().equals(request.verifyOldPassword()) && (request.newPassword() != null)) {
+			return this.resetPassword(orgId, userId, request.newPassword());
+		} else {
+			throw new BusinessException(ErrorCode.INVALID_CREDENTIALS, "Old password is incorrect");
+		}
+	}
+
+	@Transactional
+	public User updateUserEnabled(String orgId, String userId, Boolean enabled) {
+		if (enabled == null) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "Enabled status is required.");
+		}
+
+		User user = this.getUser(orgId, userId);
+		user.setEnabled(enabled);
+
+		return this.userRepository.save(user);
+	}
+
+	@Transactional
+	public Employee resetPassword(String orgId, String userId, String newPassword) {
+		User user = this.getUser(orgId, userId);
+		user.setPassword(this.passwordEncoder.encode(newPassword));
+		this.userRepository.save(user);
+		return this.employeeRepository.findByUserId(user.getId());
+	}
+
+	@Transactional
+	public Employee saveUserEmployee(String orgId, EmployeeRequest request) {
+		Employee local = this.employeeRepository.findByPhone(request.phone());
+		if (local != null) {
+			throw new BusinessException(ErrorCode.USER_ALREADY_EXISTS, "Mobile number already registered.");
+		}
+		local = this.employeeRepository.findByEmail(request.email());
+		if (local != null) {
+			throw new BusinessException(ErrorCode.USER_ALREADY_EXISTS, "Email already registered.");
+		}
+
+		User user = new User();
+		user.setAccountType(AccountType.EMPLOYEE);
+		user.setEmail(request.email());
+		user.setEnabled(true);
+		user.setOrgId(orgId);
+		user.setPhone(request.phone());
+
+		user = this.userRepository.save(user);
+
+		Employee emp = new Employee();
+		emp.setAddress(AddressUtil.toDisplayAddress(request.address()));
+		emp.setEmail(request.email());
+		emp.setName(request.name());
+		emp.setOrgId(orgId);
+		emp.setPhone(request.phone());
+		emp.setUserId(user.getId());
+		emp.setPic(null);
+
+		return this.employeeRepository.save(emp);
+	}
+
+	@Transactional
+	public Employee updateUserEmployee(String orgId, EmployeeRequest request) {
+		User user = this.userRepository.findByPhoneAndOrgIdAndAccountType(request.phone(), orgId, AccountType.EMPLOYEE)
+				.orElseThrow(() -> new NotFoundException(ErrorCode.USER_NOT_FOUND, "User not found."));
+
+		user.setEmail(request.email());
+		user.setPhone(request.phone());
+
+		this.userRepository.save(user);
+
+		Employee emp = this.employeeRepository.findByEmailAndOrgId(request.email(), orgId);
+		if (emp == null) {
+			emp = this.employeeRepository.findByPhoneAndOrgId(request.phone(), orgId);
+			if (emp == null) {
+				throw new NotFoundException(ErrorCode.EMPLOYEE_NOT_FOUND, "Employee not found");
+			}
+		}
+		emp.setAddress(AddressUtil.toDisplayAddress(request.address()));
+		emp.setEmail(request.email());
+		emp.setName(request.name());
+		emp.setPhone(request.phone());
+
+		return this.employeeRepository.save(emp);
+	}
+
+	@Transactional
+	public void updateAuthorities(String orgId, String userId, List<Authority> authorities) {
+		User user = this.getUser(orgId, userId);
+		user.setAuthorities(authorities);
+		this.userRepository.save(user);
+	}
+
+	@Transactional
+	public Employee updatePic(String userId, String orgId, MultipartFile file) throws IOException {
+		Employee emp = this.employeeRepository.findByUserId(userId);
+		if (emp.getPic() != null) {
+			this.fileService.deleteFile(emp.getPic());
+		}
+		emp.setPic(this.fileService.saveFile(file));
+		return this.employeeRepository.save(emp);
+	}
+
+	@Transactional(readOnly = true)
+	public List<EmployeeListItem> getEmployeeList(String orgId) {
+		List<Employee> employees = this.employeeRepository.findByOrgId(orgId);
+
+		return employees.stream()
+				.map(employee -> {
+					User user = this.userRepository.findByOrgIdAndId(orgId, employee.getUserId())
+							.orElse(null);
+
+					return new EmployeeListItem(
+							employee.getId(),
+							employee.getOrgId(),
+							employee.getUserId(),
+
+							employee.getName(),
+							employee.getEmail(),
+							employee.getPhone(),
+							employee.getAddress(),
+							employee.getPic(),
+
+							user != null ? user.isEnabled() : Boolean.FALSE,
+							user != null ? user.getAuthorityList() : List.of()
+					);
+				})
+				.toList();
+	}
+
+	@Transactional(readOnly = true)
+	public User getUser(String orgId, String id) {
+		return this.userRepository.findByOrgIdAndId(orgId, id)
+				.orElseThrow(() -> new NotFoundException(ErrorCode.USER_NOT_FOUND, "User not found."));
+	}
+
+	private static String generate6DigitOtp() {
+		return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+	}
+
+	private User saveUser(ClientOtpVerifyRequest request) {
+		User user = new User();
+		user.setAccountType(AccountType.CLIENT);
+		user.setOrgId(request.orgId());
+		user.setPhone(request.mobileNumber());
+		return this.userRepository.save(user);
+	}
+
+	private Client saveClient(ClientOtpVerifyRequest request, String userId) {
+		Client client = new Client();
+		client.setPhone(request.mobileNumber());
+		client.setOrgId(request.orgId());
+		client.setUserId(userId);
+		return this.clientRepository.save(client);
+	}
+
+	private boolean hasText(String value) {
+		return value != null && !value.isBlank();
+	}
+}

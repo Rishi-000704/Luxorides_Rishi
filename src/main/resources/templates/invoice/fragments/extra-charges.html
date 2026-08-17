@@ -1,0 +1,233 @@
+<th:block th:fragment="extraCharges(entry)" class="avoid-break">
+
+  <!-- ================= EXTRA KM CHARGES ================= -->
+  <th:block
+    th:if="${ entry.extraChargebleDistance > 0}">
+    <tr>
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+        "></td>
+
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+          font-style: italic;
+          font-weight: 600;
+        ">
+        Extra Charges (kms)
+      </td>
+
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+          text-align: center;
+        "
+        th:text="${entry.extraChargebleDistance}">
+        -
+      </td>
+
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+          text-align: center;
+        ">-</td>
+
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+          text-align: center;
+        "
+        th:text="${entry.pack != null and entry.pack.extraPerKM != null 
+                  ? '₹' + entry.pack.extraPerKM.amount 
+                  : '₹0.00'}"
+                  >
+        Rate
+      </td>
+
+      <td style="
+          border: 1px solid #ddd;
+          padding: 0 8px;
+          background-color: #eaeaea;
+          border-top: none;
+          border-bottom: none;
+          text-align: center;
+        "
+       th:text="${entry.extraChargeDistance != null and entry.extraChargeDistance.amount != null
+          ? '₹' + entry.extraChargeDistance.amount
+          : '₹0.00'}"
+>
+        Amount
+      </td>
+    </tr>
+  </th:block>
+
+  <!-- ================= EXTRA HOUR CHARGES ================= -->
+  <th:block
+    th:if="${entry.extraChargeTime != null 
+        and entry.extraChargeTime.amount != null 
+        and entry.extraChargeTime.amount > 0}">
+    <tr>
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;"></td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          font-style:italic;
+          font-weight:600;
+        ">
+        Extra Charges (hrs)
+      </td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:center;
+        "
+        th:text="${entry.extraChargebleTime}">
+        -
+      </td>
+
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:center;
+        "
+        th:text="${entry.pack != null and entry.pack.extraPerHS != null 
+                  ? '₹' + entry.pack.extraPerHS.amount 
+                  : '₹0.00'}">
+        Rate
+      </td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:right;
+        "
+        th:text="${entry.extraChargeTime != null and entry.extraChargeTime.amount != null
+          ? '₹' + entry.extraChargeTime.amount
+          : '₹0.00'}"
+        >
+        Amount
+      </td>
+    </tr>
+  </th:block>
+
+  <!-- ================= NIGHT CHARGE ================= -->
+  <th:block th:if="${entry.nightChargeble == true}">
+    <tr>
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;"></td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          font-style:italic;
+          font-weight:600;
+        ">
+        Night Charge
+      </td>
+
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:center;
+        "
+        th:text="${entry.pack != null and entry.pack.nightCharge != null 
+                  ? '₹' + entry.pack.nightCharge.amount 
+                  : '₹0.00'}">
+        Rate
+      </td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:right;
+        "
+        th:text="${entry.pack != null and entry.pack.nightCharge != null 
+                  ? '₹' + entry.pack.nightCharge.amount 
+                  : '₹0.00'}">
+        Amount
+      </td>
+    </tr>
+  </th:block>
+
+  <!-- ================= MANUAL EXTRA CHARGES ================= -->
+  <th:block th:if="${entry.charges != null}">
+    <tr th:each="charge : ${entry.charges}">
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;"></td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          font-style:italic;
+          font-weight: 600;
+        "
+        th:text="${charge.description}">
+        Charge
+      </td>
+
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+      <td style="border:1px solid #ddd;padding:0 8px;background:#eaeaea;border-top:none;border-bottom:none;text-align:center;">-</td>
+
+      <td style="
+          border:1px solid #ddd;
+          padding:0 8px;
+          background:#eaeaea;
+          border-top:none;
+          border-bottom:none;
+          text-align:right;
+        "
+        th:text="${charge.amount != null 
+                  ? '₹' + charge.amount.amount 
+                  : '₹0.00'}">
+        Amount
+      </td>
+    </tr>
+  </th:block>
+
+</th:block>

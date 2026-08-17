@@ -1,0 +1,510 @@
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Purchase Invoice</title>
+
+    <style>
+        @font-face {
+            font-family: 'Montserrat';
+            src: url('Montserrat-Regular.ttf') format('truetype');
+            font-weight: 400;
+        }
+
+        @font-face {
+            font-family: 'Montserrat';
+            src: url('Montserrat-SemiBold.ttf') format('truetype');
+            font-weight: 600;
+        }
+
+        @font-face {
+            font-family: 'Montserrat';
+            src: url('Montserrat-Bold.ttf') format('truetype');
+            font-weight: 700;
+        }
+
+        body {
+            font-family: 'Montserrat', sans-serif;
+            background: #ffffff;
+            color: #000000;
+            font-size: 11px;
+            line-height: 1.4;
+            padding: 20px;
+            margin: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            page-break-inside: auto;
+        }
+
+        thead {
+            display: table-header-group;
+        }
+
+        tr {
+            page-break-inside: avoid;
+        }
+
+        .avoid-break {
+            page-break-inside: avoid;
+        }
+
+        .muted {
+            color: #666666;
+        }
+
+        .cancelled-watermark {
+            position: fixed;
+            top: 42%;
+            left: 0;
+            right: 0;
+            width: 100%;
+            text-align: center;
+            font-size: 86px;
+            font-weight: 700;
+            letter-spacing: 8px;
+            color: #b00020;
+            transform: rotate(-35deg);
+            z-index: 9999;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+
+<div>
+
+    <!-- HEADER -->
+    <div class="avoid-break">
+        <table style="margin-bottom: 26px;">
+            <tr>
+                <td style="width: 45%; vertical-align: top;">
+                    <img src="logo.png" height="105" />
+                </td>
+
+                <td th:if="${orgEntity != null}"
+                    style="width: 55%; vertical-align: top; text-align: right; font-size: 10px;">
+
+                    <div style="font-weight: bold; font-size: 12px;"
+                         th:text="${orgEntity.legalName}">
+                        Company Name
+                    </div>
+
+                    <div th:text="${orgEntity.address?.formattedAddress}">
+                        Address
+                    </div>
+
+                    <div>
+                        <span th:text="${orgEntity.address?.city}"></span>
+                        <span th:if="${orgEntity.address?.state != null}">, </span>
+                        <span th:text="${orgEntity.address?.state}"></span>
+                        <span th:if="${orgEntity.address?.pincode != null}"> - </span>
+                        <span th:text="${orgEntity.address?.pincode}"></span>
+                    </div>
+
+                    <div th:if="${orgEntity.phone != null}">
+                        <strong>Phone:</strong>
+                        <span th:text="${orgEntity.phone}"></span>
+                    </div>
+
+                    <div th:if="${orgEntity.gstin != null}">
+                        <strong>GSTIN:</strong>
+                        <span th:text="${orgEntity.gstin}"></span>
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- TITLE + META -->
+    <div class="avoid-break">
+        <table style="margin-bottom: 20px;">
+            <tr>
+                <td style="width: 58%; vertical-align: top;">
+
+                    <div style="font-size: 28px; font-weight: 800; color: #00334e; margin-bottom: 10px;">
+                        PURCHASE INVOICE
+                    </div>
+
+                    <div style="font-weight: bold; margin-bottom: 4px;">
+                        Supplier / Vendor
+                    </div>
+
+                    <div th:if="${vendorBillingEntity != null}" style="line-height: 1.45;">
+                        <strong th:text="${vendorBillingEntity.legalName}">
+                            Vendor Legal Name
+                        </strong>
+                        <br />
+
+                        <span th:if="${vendorBillingEntity.gstin != null}">
+                            <strong>GSTIN:</strong>
+                            <span th:text="${vendorBillingEntity.gstin}"></span>
+                            <br />
+                        </span>
+
+                        <span th:if="${vendorBillingEntity.address?.formattedAddress != null}"
+                              th:text="${vendorBillingEntity.address?.formattedAddress}">
+                        </span>
+
+                        <span th:if="${vendorBillingEntity.address?.city != null}">
+                            <span th:text="${vendorBillingEntity.address?.city}"></span>,
+                        </span>
+
+                        <span th:if="${vendorBillingEntity.address?.state != null}"
+                              th:text="${vendorBillingEntity.address?.state}">
+                        </span>
+
+                        <span th:if="${vendorBillingEntity.address?.pincode != null}">
+                            - <span th:text="${vendorBillingEntity.address?.pincode}"></span>
+                        </span>
+
+                        <br />
+
+                        <strong>Contact:</strong>
+                        <span th:text="${vendor.name?.displayName}">
+                            Vendor Contact
+                        </span>
+
+                        <span th:if="${vendor.phone != null}">
+                            (<span th:text="${vendor.phone}"></span>)
+                        </span>
+                    </div>
+                </td>
+
+                <td style="width: 42%; vertical-align: top; text-align: right;">
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Fleetovo PI No:</strong>
+                        <span th:text="${purchaseInvoice.purchaseInvoiceNumber}"></span>
+                    </div>
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Vendor Invoice No:</strong>
+                        <span th:text="${purchaseInvoice.vendorInvoiceNumber != null ? purchaseInvoice.vendorInvoiceNumber : '-'}"></span>
+                    </div>
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Invoice Date:</strong>
+                        <span th:text="${T(com.core.util.DateFormatUtil).display(purchaseInvoice.invoiceDate)}"></span>
+                    </div>
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Vendor Invoice Date:</strong>
+                        <span th:text="${T(com.core.util.DateFormatUtil).display(purchaseInvoice.vendorInvoiceDate)}"></span>
+                    </div>
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Due Date:</strong>
+                        <span th:text="${T(com.core.util.DateFormatUtil).display(purchaseInvoice.dueDate)}"></span>
+                    </div>
+
+                    <div style="margin-bottom: 4px;">
+                        <strong>Status:</strong>
+                        <span th:text="${purchaseInvoice.status}"></span>
+                    </div>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- BILL TO -->
+    <div class="avoid-break"
+         th:if="${orgEntity != null}"
+         style="border: 1px solid #ddd; padding: 10px; margin-bottom: 16px;">
+
+        <div style="font-weight: bold; margin-bottom: 4px; color: #00334e;">
+            Billed To / Recipient
+        </div>
+
+        <strong th:text="${orgEntity.legalName}"></strong>
+
+        <span th:if="${orgEntity.gstin != null}">
+            | GSTIN:
+            <span th:text="${orgEntity.gstin}"></span>
+        </span>
+
+        <br />
+
+        <span th:text="${orgEntity.address?.formattedAddress}"></span>
+        <span th:if="${orgEntity.address?.city != null}">
+            <span th:text="${orgEntity.address?.city}"></span>,
+        </span>
+        <span th:text="${orgEntity.address?.state}"></span>
+        <span th:if="${orgEntity.address?.pincode != null}">
+            - <span th:text="${orgEntity.address?.pincode}"></span>
+        </span>
+    </div>
+
+    <!-- DUTY TABLE -->
+    <table style="font-size: 10px;">
+        <thead>
+        <tr>
+            <th style="background:#00334e; color:#fff; padding:7px; width:5%;">S.No.</th>
+            <th style="background:#00334e; color:#fff; padding:7px; width:31%;">Duty Details</th>
+            <th style="background:#00334e; color:#fff; padding:7px; width:19%;">Package</th>
+            <th style="background:#00334e; color:#fff; padding:7px; width:18%;">Usage</th>
+            <th style="background:#00334e; color:#fff; padding:7px; width:17%;">Charges</th>
+            <th style="background:#00334e; color:#fff; padding:7px; width:10%;">Total</th>
+        </tr>
+        </thead>
+
+        <tbody>
+        <tr th:if="${entries == null or entries.isEmpty()}">
+            <td colspan="6" style="border:1px solid #ddd; padding:10px; text-align:center;">
+                No duties added.
+            </td>
+        </tr>
+
+        <th:block th:each="entry, stat : ${entries}">
+            <tr>
+                <td style="border:1px solid #ddd; padding:7px; text-align:center; vertical-align:top;"
+                    th:text="${stat.index + 1}">
+                </td>
+
+                <td style="border:1px solid #ddd; padding:7px; vertical-align:top;">
+                    <strong>Booking:</strong>
+                    <span th:text="${entry.bookingId}"></span>
+                    <br />
+
+                    <strong>Duty:</strong>
+                    <span th:text="${entry.dutyId}"></span>
+                    <br />
+
+                    <strong>Reporting:</strong>
+                    <span th:text="${T(com.core.util.DateFormatUtil).display(entry.reportingTime)}"></span>
+                    <br />
+
+                    <span class="muted" th:text="${entry.reportingLocation?.formattedAddress}"></span>
+                    <br />
+
+                    <strong>Drop:</strong>
+                    <span th:text="${T(com.core.util.DateFormatUtil).display(entry.dropTime)}"></span>
+                    <br />
+
+                    <span class="muted" th:text="${entry.dropLocation?.formattedAddress}"></span>
+                </td>
+
+                <td style="border:1px solid #ddd; padding:7px; vertical-align:top;">
+                    <strong th:text="${entry.pack?.dutyType}"></strong>
+                    <br />
+
+                    <span th:if="${entry.pack?.distance != null}">
+                        KM: <span th:text="${entry.pack.distance}"></span>
+                        <br />
+                    </span>
+
+                    <span th:if="${entry.pack?.time != null}">
+                        Hours: <span th:text="${entry.pack.time}"></span>
+                        <br />
+                    </span>
+
+                    <span th:if="${entry.pack?.unit != null}">
+                        Unit: <span th:text="${entry.pack.unit}"></span>
+                    </span>
+                </td>
+
+                <td style="border:1px solid #ddd; padding:7px; vertical-align:top;">
+                    <strong>Days:</strong>
+                    <span th:text="${entry.runningDays != null ? entry.runningDays : 1}"></span>
+                    <br />
+
+                    <strong>Start KM:</strong>
+                    <span th:text="${entry.startingKM != null ? entry.startingKM : '-'}"></span>
+                    <br />
+
+                    <strong>Close KM:</strong>
+                    <span th:text="${entry.closingKM != null ? entry.closingKM : '-'}"></span>
+                    <br />
+
+                    <strong>Extra KM:</strong>
+                    <span th:text="${entry.extraChargebleDistance != null ? entry.extraChargebleDistance : 0}"></span>
+                    <br />
+
+                    <strong>Extra Hrs:</strong>
+                    <span th:text="${entry.extraChargebleTime != null ? entry.extraChargebleTime : 0}"></span>
+                    <br />
+
+                    <strong>Night:</strong>
+                    <span th:text="${entry.nightChargeble == true ? 'Yes' : 'No'}"></span>
+                </td>
+
+                <td style="border:1px solid #ddd; padding:7px; vertical-align:top;">
+                    <strong>Base:</strong>
+                    <span th:text="${entry.chargebleBaseFare != null ? '₹' + entry.chargebleBaseFare.amount : '₹0.00'}"></span>
+                    <br />
+
+                    <strong>Extra KM:</strong>
+                    <span th:text="${entry.extraChargeDistance != null ? '₹' + entry.extraChargeDistance.amount : '₹0.00'}"></span>
+                    <br />
+
+                    <strong>Extra Hr:</strong>
+                    <span th:text="${entry.extraChargeTime != null ? '₹' + entry.extraChargeTime.amount : '₹0.00'}"></span>
+                    <br />
+
+                    <strong>Night:</strong>
+                    <span th:text="${entry.nightCharge != null ? '₹' + entry.nightCharge.amount : '₹0.00'}"></span>
+                    <br />
+
+                    <strong>Other:</strong>
+                    <span th:text="${entry.extraChargesTotal != null ? '₹' + entry.extraChargesTotal.amount : '₹0.00'}"></span>
+                </td>
+
+                <td style="border:1px solid #ddd; padding:7px; text-align:right; vertical-align:top; font-weight:bold;"
+                    th:text="${entry.dutyTotal != null ? '₹' + entry.dutyTotal.amount : '₹0.00'}">
+                </td>
+            </tr>
+
+            <tr th:each="charge : ${entry.charges}">
+                <td style="border:1px solid #ddd; padding:5px; background:#f3f3f3;"></td>
+
+                <td colspan="4"
+                    style="border:1px solid #ddd; padding:5px; background:#f3f3f3; font-style:italic;">
+                    Extra Charge -
+                    <span th:text="${charge.description != null ? charge.description : 'Charge'}"></span>
+                </td>
+
+                <td style="border:1px solid #ddd; padding:5px; background:#f3f3f3; text-align:right;"
+                    th:text="${charge.amount != null ? '₹' + charge.amount.amount : '₹0.00'}">
+                </td>
+            </tr>
+        </th:block>
+        </tbody>
+    </table>
+
+    <!-- TOTALS -->
+    <div class="avoid-break">
+        <table style="margin-top: 14px;">
+            <tr>
+                <td style="width: 50%; vertical-align: top; padding-right: 10px;">
+                    <table style="font-size: 10px; text-align: center; margin-top: 10px;">
+                        <thead>
+                        <tr>
+                            <th style="border:1px solid #000; padding:5px;">HSN/SAC</th>
+                            <th style="border:1px solid #000; padding:5px;">Taxable Amount</th>
+                        </tr>
+                        </thead>
+
+                        <tbody>
+                        <tr>
+                            <td style="border:1px solid #000; padding:5px;">996601</td>
+                            <td style="border:1px solid #000; padding:5px;"
+                                th:text="${purchaseInvoice.taxableAmount != null ? '₹' + purchaseInvoice.taxableAmount.amount : '₹0.00'}">
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+
+                    <div th:if="${purchaseInvoice.remarks != null}"
+                         style="margin-top:12px; font-size:10px;">
+                        <strong>Remarks:</strong>
+                        <span th:text="${purchaseInvoice.remarks}"></span>
+                    </div>
+                </td>
+
+                <td style="width: 50%; vertical-align: top; padding-left: 10px;">
+                    <table style="font-size: 10px;">
+                        <tr>
+                            <td style="padding:6px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold;">
+                                Subtotal
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${purchaseInvoice.subtotal != null ? '₹' + purchaseInvoice.subtotal.amount : '₹0.00'}">
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:6px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold;">
+                                Taxable Amount
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${purchaseInvoice.taxableAmount != null ? '₹' + purchaseInvoice.taxableAmount.amount : '₹0.00'}">
+                            </td>
+                        </tr>
+
+                        <tr th:if="${hasIgst}">
+                            <td style="padding:6px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold;">
+                                IGST
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${'₹' + igstAmount}">
+                            </td>
+                        </tr>
+
+                        <tr th:if="${hasCgst}">
+                            <td style="padding:6px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold;">
+                                CGST
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${'₹' + cgstAmount}">
+                            </td>
+                        </tr>
+
+                        <tr th:if="${hasSgst}">
+                            <td style="padding:6px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold;">
+                                SGST
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${'₹' + sgstAmount}">
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:7px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold; font-size:13px;">
+                                Grand Total
+                            </td>
+                            <td style="padding:7px 10px; border:1px solid #ccc; text-align:right; font-size:13px; font-weight:bold;"
+                                th:text="${purchaseInvoice.grandTotal != null ? '₹' + purchaseInvoice.grandTotal.amount : '₹0.00'}">
+                            </td>
+                        </tr>
+
+                        <tr th:each="p : ${payments}">
+                            <td style="padding:6px 10px; border:1px solid #ccc; font-weight:bold;">
+                                <span th:text="${#strings.substringBefore(p.key, '|')}"></span>
+                                <br />
+                                <span th:if="${#strings.contains(p.key, '|')}"
+                                      th:text="${#strings.substringAfter(p.key, '|')}"
+                                      style="font-size:9px; color:#777;">
+                                </span>
+                            </td>
+                            <td style="padding:6px 10px; border:1px solid #ccc; text-align:right;"
+                                th:text="${'₹' + p.value}">
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td style="padding:7px 10px; border:1px solid #ccc; background:#e0e0e0; font-weight:bold; color:#00334e; font-size:13px;">
+                                Balance Payable
+                            </td>
+                            <td style="padding:7px 10px; border:1px solid #ccc; text-align:right; color:#00334e; font-size:13px; font-weight:bold;"
+                                th:text="${'₹' + pendingAmount}">
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+
+        <div style="background:#e0e0e0; padding:8px; margin-top:15px; font-size:10px; border:1px solid #ccc;"
+             th:if="${amountInWords}">
+            <strong>In Words:</strong>
+            <span th:text="${amountInWords}"></span>
+        </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div style="margin-top: 26px; font-size: 9px; color:#666; border-top:1px solid #ddd; padding-top:10px;">
+        <strong>Internal Note:</strong>
+        This purchase invoice PDF is generated from Fleetovo vendor duty records.
+        Verify vendor invoice number, vendor invoice date, GST treatment, and payment-out status before accounting closure.
+    </div>
+</div>
+
+<div th:if="${invoiceCancelled}" class="cancelled-watermark">
+    CANCELLED
+</div>
+
+</body>
+</html>

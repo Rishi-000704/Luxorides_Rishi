@@ -1,0 +1,230 @@
+<tr th:fragment="dutyRow(entry, index)"
+    class="avoid-break">
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			text-align:center;
+			box-sizing:border-box;
+		"
+			th:text="${index}">
+	</td>
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			box-sizing:border-box;
+		"
+	>
+
+		<!-- Vehicle -->
+		<th:block
+				th:with="
+				vehicleName=${entry.allotedVehicle?.masterVehicle?.name},
+				registrationNumber=${entry.allotedVehicle?.registrationNumber}
+			"
+		>
+
+			<div
+					th:if="${
+					(vehicleName != null and !#strings.isEmpty(vehicleName))
+					or
+					(registrationNumber != null and !#strings.isEmpty(registrationNumber))
+				}"
+			>
+
+				<strong>Vehicle:</strong>
+
+				<span
+						th:if="${vehicleName != null
+						and !#strings.isEmpty(vehicleName)}"
+						th:text="${vehicleName}">
+				</span>
+
+				<span
+						th:if="${
+						vehicleName != null
+						and !#strings.isEmpty(vehicleName)
+						and registrationNumber != null
+						and !#strings.isEmpty(registrationNumber)
+					}">
+					|
+				</span>
+
+				<span
+						th:if="${registrationNumber != null
+						and !#strings.isEmpty(registrationNumber)}"
+						th:text="${registrationNumber}">
+				</span>
+
+			</div>
+
+		</th:block>
+
+		<!-- Duty -->
+		<div>
+
+			<strong>Duty Type:</strong>
+
+			<span
+					th:if="${entry.pack != null}"
+					th:text="${entry.pack.dutyType}">
+			</span>
+
+			<span
+					th:if="${entry.pack != null
+					and (
+						entry.pack.time != null
+						or entry.pack.distance != null
+					)}"
+			>
+				(
+
+				<th:block
+						th:if="${entry.pack.time != null}"
+				>
+					<span
+							th:text="${entry.pack.time}">
+					</span>
+					hrs
+				</th:block>
+
+				<span
+						th:if="${entry.pack.time != null
+						and entry.pack.distance != null}">
+					,
+				</span>
+
+				<th:block
+						th:if="${entry.pack.distance != null}"
+				>
+					<span
+							th:text="${entry.pack.distance}">
+					</span>
+					kms
+				</th:block>
+
+				)
+			</span>
+
+			<span
+					th:if="${entry.reportingTime != null}">
+				|
+			</span>
+
+			<th:block
+					th:if="${entry.reportingTime != null}"
+			>
+
+				<strong>Date:</strong>
+
+				<span
+						th:text="${#dates.format(
+						entry.reportingTime,
+						'dd MMM yyyy'
+					)}">
+				</span>
+
+			</th:block>
+
+		</div>
+
+		<!-- Passenger -->
+		<div
+				th:if="${entry.passengerNames != null
+				and !entry.passengerNames.isEmpty()}"
+		>
+
+			<strong>Passenger:</strong>
+
+			<span
+					th:text="${entry.passengerNames[0]}">
+			</span>
+
+		</div>
+
+		<!-- Running kms -->
+		<div
+				th:if="${entry.totalRunningKM != null}"
+		>
+
+			<strong>Total running kms:</strong>
+
+			<span
+					th:text="${entry.totalRunningKM}">
+			</span>
+			kms
+
+		</div>
+
+		<!-- Running hrs -->
+		<div
+				th:if="${entry.totalRunningHS != null}"
+		>
+
+			<strong>Total running hrs:</strong>
+
+			<span
+					th:text="${entry.totalRunningHS}">
+			</span>
+			hrs
+
+		</div>
+
+	</td>
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			text-align:center;
+			box-sizing:border-box;
+		">
+		1
+	</td>
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			text-align:center;
+			box-sizing:border-box;
+		"
+			th:text="${entry.runningDays}">
+	</td>
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			text-align:right;
+			box-sizing:border-box;
+		"
+			th:text="'₹' + ${entry.pack.baseFare.amount}">
+	</td>
+
+	<td
+			style="
+			border:1px solid #ddd;
+			padding:8px;
+			vertical-align:top;
+			background-color:#fff;
+			text-align:right;
+			box-sizing:border-box;
+		"
+			th:text="'₹' + ${entry.chargebleBaseFare.amount}">
+	</td>
+
+</tr>

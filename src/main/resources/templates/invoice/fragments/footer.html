@@ -1,0 +1,210 @@
+<div th:fragment="invoiceFooter"
+     class="invoice-part">
+
+  <!-- ===========================
+       TERMS AND CONDITIONS
+       =========================== -->
+
+  <div
+          th:if="${termsAndConditions != null
+			and !#strings.isEmpty(termsAndConditions)}"
+          style="margin-top:30px;"
+  >
+    <div
+            class="invoice-terms"
+            th:utext="${termsAndConditions}">
+    </div>
+
+  </div>
+
+  <!-- ===========================
+       BANK DETAILS
+       =========================== -->
+
+  <div
+          th:if="${orgEntity != null and (
+			(orgEntity.bankName != null and !#strings.isEmpty(orgEntity.bankName))
+			or
+			(orgEntity.accountName != null and !#strings.isEmpty(orgEntity.accountName))
+			or
+			(orgEntity.accountNumber != null and !#strings.isEmpty(orgEntity.accountNumber))
+			or
+			(orgEntity.ifsc != null and !#strings.isEmpty(orgEntity.ifsc))
+			or
+			(orgEntity.upiId != null and !#strings.isEmpty(orgEntity.upiId))
+		)}"
+          class="avoid-break"
+  >
+
+    <div style="
+			font-weight:bold;
+			margin-bottom:5px;
+		">
+      Bank Account Details:
+    </div>
+
+    <table style="
+			width:100%;
+			border-collapse:collapse;
+			border:1px solid #000;
+		">
+
+      <tr>
+
+        <td
+                th:style="${upiQrImage != null}
+		? 'width:80%; vertical-align:top; padding:0;'
+		: 'width:100%; vertical-align:top; padding:0;'"
+        >
+
+          <table style="
+						width:100%;
+						border-collapse:collapse;
+						font-size:11px;
+					">
+
+            <tr
+                    th:if="${orgEntity.bankName != null
+								and !#strings.isEmpty(orgEntity.bankName)}"
+            >
+
+              <td style="
+								width:150px;
+								font-weight:bold;
+								padding:5px 10px;
+								border-bottom:1px solid #ccc;
+							">
+                BANK NAME
+              </td>
+
+              <td
+                      style="
+									padding:5px 10px;
+									border-bottom:1px solid #ccc;
+								"
+                      th:text="${orgEntity.bankName}">
+              </td>
+
+            </tr>
+
+            <tr
+                    th:if="${orgEntity.accountName != null
+								and !#strings.isEmpty(orgEntity.accountName)}"
+            >
+
+              <td style="
+								font-weight:bold;
+								padding:5px 10px;
+								border-bottom:1px solid #ccc;
+							">
+                ACCOUNT NAME
+              </td>
+
+              <td
+                      style="
+									padding:5px 10px;
+									border-bottom:1px solid #ccc;
+								"
+                      th:text="${orgEntity.accountName}">
+              </td>
+
+            </tr>
+
+            <tr
+                    th:if="${orgEntity.accountNumber != null
+								and !#strings.isEmpty(orgEntity.accountNumber)}"
+            >
+
+              <td style="
+								font-weight:bold;
+								padding:5px 10px;
+								border-bottom:1px solid #ccc;
+							">
+                ACCOUNT NO.
+              </td>
+
+              <td
+                      style="
+									padding:5px 10px;
+									border-bottom:1px solid #ccc;
+								"
+                      th:text="${orgEntity.accountNumber}">
+              </td>
+
+            </tr>
+
+            <tr
+                    th:if="${orgEntity.ifsc != null
+								and !#strings.isEmpty(orgEntity.ifsc)}"
+            >
+
+              <td style="
+								font-weight:bold;
+								padding:5px 10px;
+								border-bottom:1px solid #ccc;
+							">
+                IFSC
+              </td>
+
+              <td
+                      style="
+									padding:5px 10px;
+									border-bottom:1px solid #ccc;
+								"
+                      th:text="${orgEntity.ifsc}">
+              </td>
+
+            </tr>
+
+            <tr
+                    th:if="${orgEntity.upiId != null
+								and !#strings.isEmpty(orgEntity.upiId)}"
+            >
+
+              <td style="
+								font-weight:bold;
+								padding:5px 10px;
+							">
+                UPI ID
+              </td>
+
+              <td
+                      style="
+									padding:5px 10px;
+								"
+                      th:text="${orgEntity.upiId}">
+              </td>
+
+            </tr>
+
+          </table>
+
+        </td>
+
+        <td
+                th:if="${upiQrImage != null}"
+                style="
+		width:20%;
+		vertical-align:middle;
+		text-align:center;
+		border-left:1px solid #000;
+		padding:6px;
+	"
+        >
+
+          <img
+                  th:src="${upiQrImage}"
+                  width="130"
+                  height="130"
+                  alt="UPI payment QR"
+          />
+
+        </td>
+
+      </tr>
+
+    </table>
+
+  </div>
+
+</div>

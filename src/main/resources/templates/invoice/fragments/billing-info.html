@@ -1,0 +1,218 @@
+<div th:fragment="billingInfo"
+     class="invoice-part avoid-break">
+
+    <table style="
+		width:100%;
+		border-collapse:collapse;
+		margin-bottom:20px;
+	">
+
+        <tr>
+
+            <!-- LEFT -->
+            <td style="
+				width:60%;
+				vertical-align:top;
+			">
+
+                <div style="
+					font-size:28px;
+					font-weight:800;
+					color:#00334e;
+					margin-bottom:10px;
+				">
+                    TAX INVOICE
+                </div>
+
+                <div style="
+					font-weight:bold;
+					margin-bottom:4px;
+				">
+                    Billed To
+                </div>
+
+                <!-- Corporate client -->
+                <div
+                        th:if="${billingEntity != null}"
+                        style="
+						font-size:12px;
+						line-height:1.4;
+					"
+                >
+
+                    <div
+                            th:if="${billingEntity.legalName != null}"
+                    >
+                        <strong
+                                th:text="${billingEntity.legalName}">
+                        </strong>
+                    </div>
+
+                    <div
+                            th:if="${billingEntity.gstin != null
+							and !#strings.isEmpty(billingEntity.gstin)}"
+                    >
+
+                        <strong>GSTIN: </strong>
+
+                        <span
+                                th:text="${billingEntity.gstin}">
+						</span>
+
+                    </div>
+
+                    <div
+                            th:if="${billingAddress != null}"
+                            th:text="${billingAddress}">
+                    </div>
+
+                    <div
+                            th:if="${client != null
+							and client.name != null
+							and client.name.displayName != null}"
+                    >
+
+                        <strong>
+                            Kind Attention:
+                        </strong>
+
+                        <span
+                                th:text="${client.name.displayName}">
+						</span>
+
+                        <span
+                                th:if="${client.phone != null
+								and !#strings.isEmpty(client.phone)}"
+                        >
+							(<span
+                                th:text="${client.phone}">
+							</span>)
+						</span>
+
+                    </div>
+
+                </div>
+
+                <!-- Walk-in client -->
+                <div
+                        th:if="${billingEntity == null}"
+                        style="
+						font-size:12px;
+						line-height:1.4;
+					"
+                >
+
+                    <div
+                            th:if="${client != null
+							and client.name != null
+							and client.name.displayName != null}"
+                    >
+                        <strong
+                                th:text="${client.name.displayName}">
+                        </strong>
+                    </div>
+
+                    <div
+                            th:if="${client != null
+							and client.phone != null
+							and !#strings.isEmpty(client.phone)}"
+                            th:text="${client.phone}">
+                    </div>
+
+                    <div
+                            th:if="${client != null
+							and client.email != null
+							and !#strings.isEmpty(client.email)}"
+                            th:text="${client.email}">
+                    </div>
+
+                    <div
+                            th:if="${clientAddress != null}"
+                            th:text="${clientAddress}">
+                    </div>
+
+                </div>
+
+            </td>
+
+            <!-- RIGHT -->
+            <td style="
+				width:40%;
+				vertical-align:top;
+				text-align:right;
+			">
+
+                <div style="margin-bottom:4px;">
+
+                    <strong>
+                        Invoice Number:
+                    </strong>
+
+                    <span
+                            th:text="${invoice.invoiceNumber}">
+					</span>
+
+                </div>
+
+                <div style="margin-bottom:4px;">
+
+                    <strong>Date: </strong>
+
+                    <span
+                            th:text="${#dates.format(
+							invoice.invoiceDate,
+							'dd MMM yyyy, hh:mm a'
+						)}">
+					</span>
+
+                </div>
+
+                <div style="margin-bottom:4px;">
+
+                    <strong>
+                        Booking ID:
+                    </strong>
+
+                    <span
+                            th:text="${invoice.bookingId}">
+					</span>
+
+                </div>
+
+                <div style="margin-top:14px;">
+
+                    <strong>
+                        Place of Supply:
+                    </strong>
+
+                    <span
+                            th:text="${invoice.placeOfSupply}">
+					</span>
+
+                </div>
+
+                <div>
+
+                    <strong>
+                        Booking Type:
+                    </strong>
+
+                    <span
+                            th:if="${billingEntity != null}">
+						Corporate
+					</span>
+
+                    <span
+                            th:if="${billingEntity == null}">
+						Walk-in
+					</span>
+
+                </div>
+
+            </td>
+
+        </tr>
+
+    </table>
+
+</div>

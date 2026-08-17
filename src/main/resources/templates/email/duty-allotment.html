@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+	margin: 0;
+	padding: 0;
+	font-family: 'Montserrat', Arial, sans-serif;
+	background-color: #f7f9fc;
+	color: #1a1a1a;
+}
+
+.container {
+	max-width: 600px;
+	margin: 20px auto;
+	background: #ffffff;
+	border-radius: 8px;
+	overflow: hidden;
+	border: 1px solid #eeeeee;
+}
+
+.header {
+	background-color: #073b4c;
+	color: #ffffff;
+	text-align: center;
+	padding: 30px 20px;
+}
+
+.content {
+	padding: 25px;
+}
+
+.table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 25px;
+}
+
+.table td {
+	padding: 12px 15px;
+	border: 1px solid #dddddd;
+	font-size: 14px;
+}
+
+.label {
+	background-color: #f4f6f8;
+	font-weight: 700;
+	width: 35%;
+	color: #073b4c;
+}
+
+.section-title {
+	font-size: 18px;
+	color: #073b4c;
+	border-bottom: 2px solid #073b4c;
+	padding-bottom: 8px;
+	margin: 25px 0 15px 0;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.profile-container {
+	margin: 20px 0;
+	border: 1px solid #eeeeee;
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.profile-header {
+	background: #f4f6f8;
+	padding: 10px 15px;
+	font-weight: 700;
+	color: #073b4c;
+	font-size: 13px;
+	border-bottom: 1px solid #eeeeee;
+	text-transform: uppercase;
+}
+
+.profile-body {
+	padding: 15px;
+}
+
+.avatar {
+	width: 60px;
+	height: 60px;
+	border-radius: 50%;
+	object-fit: cover;
+	background: #eee;
+}
+
+.vehicle-img {
+	width: 100px;
+	height: auto;
+	border-radius: 4px;
+	object-fit: contain;
+}
+
+.btn {
+	display: inline-block;
+	padding: 15px 35px;
+	background-color: #073b4c;
+	color: #ffffff;
+	text-decoration: none;
+	border-radius: 6px;
+	font-weight: 700;
+	margin-top: 20px;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+	font-size: 14px;
+}
+
+.footer {
+	background-color: #f4f6f8;
+	padding: 30px 20px;
+	text-align: center;
+	border-top: 1px solid #dddddd;
+}
+</style>
+</head>
+<body>
+	<div class="container">
+		<div class="header">
+			<h1 style="margin: 0; font-size: 24px;">Duty Allotted</h1>
+		</div>
+		<div class="content">
+			<p>
+				Dear <strong  th:text="${data.clientName}">Mr. John Doe</strong>,
+			</p>
+			<p>The chauffeur and vehicle for the following duty have been
+				allotted. Please find the assignment details below.</p>
+			<table class="table">
+				<tr>
+					<td class="label">Booking ID</td>
+					<td th:text="${data.bookingId}">BK-2024-00125</td>
+				</tr>
+				<tr>
+					<td class="label">Duty ID</td>
+					<td th:text="${data.dutyId}">DTY-4001</td>
+				</tr>
+			</table>
+			<h2 class="section-title">Schedule & Location</h2>
+			<table class="table">
+				<tr>
+					<td class="label">Duty Type</td>
+					<td th:text="${data.dutyType}">Oct 25, 2024 | 08:30 AM</td>
+				</tr>
+				<tr>
+					<td class="label">Reporting</td>
+					<td th:text="${data.reportingDate}">Oct 25, 2024 | 08:30 AM</td>
+				</tr>
+				<tr>
+					<td class="label">From</td>
+					<td th:text="${data.reportingLocation}">IGI Airport, Terminal 3</td>
+				</tr>
+			</table>
+
+			<div class="profile-container">
+				<div class="profile-header">Chauffeur Information</div>
+				<div class="profile-body">
+					<table width="100%" border="0" cellpadding="0" cellspacing="0">
+						<tr>
+							<td width="75"><img
+								src="https://placehold.co/400x200/073b4c/ffffff?text=${data.driverName}"
+								class="avatar"></td>
+							<td>
+								<div style="font-size: 17px; font-weight: 700; color: #073b4c;"
+								th:text="${data.driverName}"
+								>Rajesh Kumar</div>
+								<div style="font-size: 13px; color: #666; margin-top: 4px;"
+								>Verified Chauffeur</div>
+								<div
+									style="font-size: 15px; color: #073b4c; font-weight: 600; margin-top: 8px;"
+									th:text="${data.driverPhone}"
+									>+91 98765 43210</div>
+							</td>
+						</tr>
+					</table>
+				</div>
+			</div>
+
+			<div class="profile-container">
+				<div class="profile-header">Vehicle Information</div>
+				<div class="profile-body">
+					<table width="100%" border="0" cellpadding="0" cellspacing="0">
+						<tr>
+							<td width="115"><img
+								src="https://placehold.co/400x200/073b4c/ffffff?text=${data.vehicleName}"
+								class="vehicle-img"></td>
+							<td>
+								<div style="font-size: 17px; font-weight: 700; color: #073b4c;"
+								th:text="${data.vehicleName}"
+								>Mercedes-Benz E-Class</div>
+								<div style="font-size: 13px; color: #666; margin-top: 4px;"
+								th:text="${data.vehicleType}"
+								>Premium Sedan</div>
+								<div
+									style="font-size: 15px; color: #d32f2f; font-weight: 700; margin-top: 8px; border: 1px dashed #d32f2f; display: inline-block; padding: 2px 8px; border-radius: 4px;"
+									th:text="${data.vehicleNumber}"
+									>DL 01 CA 1234</div>
+							</td>
+						</tr>
+					</table>
+				</div>
+			</div>
+
+			<div style="text-align: center;">
+				<a href="https://app.luxorides.com" class="btn">Visit App</a>
+			</div>
+		</div>
+		<div class="footer">
+			<p style="font-size: 14px; color: #666;">
+				For any assistance, reach us at <strong style="color: #073b4c;">+91-9506090609</strong>
+				| <strong style="color: #073b4c;">support@luxorides.com</strong>
+			</p>
+			<p style="font-size: 11px; color: #999; margin-top: 20px;">This
+				is an automated message. Replies to this email are not monitored.</p>
+		</div>
+	</div>
+</body>
+</html>

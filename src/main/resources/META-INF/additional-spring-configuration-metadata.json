@@ -1,0 +1,27 @@
+{"properties": [
+  {
+    "name": "security.jwt.secret-key",
+    "type": "java.lang.String",
+    "description": "A description for 'security.jwt.secret-key'"
+  },
+  {
+    "name": "security.jwt.expiration-time",
+    "type": "java.lang.long",
+    "description": "A description for 'security.jwt.expiration-time'"
+  },
+  {
+    "name": "app.seed.enabled",
+    "type": "java.lang.String",
+    "description": "A description for 'app.seed.enabled'"
+  },
+  {
+    "name": "razorpay.secret",
+    "type": "java.lang.String",
+    "description": "A description for 'razerpay.secret'"
+  },
+  {
+    "name": "razorpay.key",
+    "type": "java.lang.String",
+    "description": "A description for 'razorpay.key'"
+  }
+]}
