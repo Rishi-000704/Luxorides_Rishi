@@ -22,7 +22,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Component
-@Order(1)
+@Order(2)
 @RequiredArgsConstructor
 @Slf4j
 public class GoogleGeoProvider implements GeoProvider {
