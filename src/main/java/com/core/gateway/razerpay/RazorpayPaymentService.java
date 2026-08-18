@@ -15,6 +15,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.core.events.PaymentConfirmedEvent;
@@ -206,6 +207,20 @@ public class RazorpayPaymentService {
 
 	/* ================= QR CODE FOR DRIVER LINK ================= */
 
+	/*
+	 * REQUIRES_NEW rather than the class-default REQUIRED: this is called from inside
+	 * ExternalDriverDutyService.submitEnd's own @Transactional method, which already
+	 * treats QR-generation failure as non-fatal (catches the exception and returns a
+	 * QR_GENERATION_FAILED instruction). With the default REQUIRED propagation this
+	 * method joins that same physical transaction, so when it throws (e.g. Razorpay not
+	 * configured for the org), Spring's transaction interceptor marks the *shared*
+	 * transaction rollback-only before the caller's catch block ever runs -- the caller's
+	 * graceful handling then has no effect, and the whole duty completion (checkpoint,
+	 * odometer, fare) silently rolls back with UnexpectedRollbackException instead of the
+	 * real error. REQUIRES_NEW isolates a failed QR attempt to its own transaction so the
+	 * already-valid duty-completion work can still commit.
+	 */
+	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public RazorpayQrPayload generateQR(
 			String orgId,
 			String bookingId,
