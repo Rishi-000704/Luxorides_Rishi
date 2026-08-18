@@ -1,5 +1,7 @@
 package com.core.bootstrap;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +10,10 @@ import org.springframework.stereotype.Component;
 
 import lombok.RequiredArgsConstructor;
 
+import com.core.dtos.booking.AllotDutyCommand;
+import com.core.dtos.booking.BookingForm;
+import com.core.dtos.booking.DutyForm;
+import com.core.dtos.common.AddressSnapshotDTO;
 import com.core.models.CityGarage;
 import com.core.models.Client;
 import com.core.models.ClientBillingEntity;
@@ -26,13 +32,16 @@ import com.core.models.Passenger;
 import com.core.models.SmsProviderConfig;
 import com.core.models.enums.AccountType;
 import com.core.models.enums.Authority;
+import com.core.models.enums.DutyStatus;
 import com.core.models.enums.DutyType;
+import com.core.models.enums.GstType;
 import com.core.models.enums.OrgStatus;
 import com.core.models.enums.OwnershipType;
 import com.core.models.enums.PackageScope;
 import com.core.models.enums.SmsProviderType;
 import com.core.models.enums.VehicleStatus;
 import com.core.repositories.*;
+import com.core.services.BookingService;
 
 @Component
 @RequiredArgsConstructor
@@ -53,6 +62,8 @@ public class DevDataSeeder implements CommandLineRunner {
 	private final DriverRepository driverRepository;
 	private final CityGarageRepository garageRepository;
 	private final SmsProviderConfigRepository smsProviderConfigRepository;
+	private final BookingEntryRepository bookingEntryRepository;
+	private final BookingService bookingService;
 	private final Test test;
 
 	@Override
@@ -69,6 +80,14 @@ public class DevDataSeeder implements CommandLineRunner {
 		// login is unusable locally without real SMS gateway credentials.
 		seedConsoleSmsProviderIfMissing("demo");
 		seedConsoleSmsProviderIfMissing("luxorides");
+
+		try {
+			seedSampleDutyIfMissing("demo");
+		} catch (Exception ex) {
+			// Non-critical for app startup -- the driver app just shows an empty
+			// list if this can't run (e.g. the underlying dev data doesn't exist yet).
+			ex.printStackTrace();
+		}
 
 		// 🚫 Already seeded → exit
 		if (orgRepository.count() > 0) {
@@ -112,6 +131,101 @@ public class DevDataSeeder implements CommandLineRunner {
 		config.setDefaultConfig(true);
 		config.setDisplayName("Local dev console (no real SMS)");
 		smsProviderConfigRepository.save(config);
+	}
+
+	/**
+	 * Dev-only: creates one real, fully-allotted duty for the seeded ORG driver
+	 * (+918840844028 / Mahesh Singh) using the actual booking pipeline
+	 * (BookingService.addBooking -> addBookingEntry -> confirmBooking -> allotDuty)
+	 * so the driver app has something to show instead of an empty list. Reuses
+	 * dev data seeded earlier by this same class -- no invented IDs, no fake fares
+	 * (BookingService/BookingUtil compute the duty total exactly as they would for
+	 * a real booking).
+	 */
+	private void seedSampleDutyIfMissing(String orgId) {
+		Driver driver = driverRepository.findByPhoneAndOrgId("+918840844028", orgId);
+		if (driver == null) {
+			return;
+		}
+
+		boolean alreadyHasDuty = bookingEntryRepository.existsByDriverIdAndStatusIn(
+				driver.getId(),
+				List.of(DutyStatus.REQUESTED, DutyStatus.ALLOTTED, DutyStatus.RUNNING, DutyStatus.COMPLETED)
+		);
+
+		if (alreadyHasDuty) {
+			return;
+		}
+
+		Client client = clientRepository.findByPhoneAndOrgId("+918840844023", orgId);
+		FleetVehicle fleetVehicle = fleetVehicleRepository.findByRegistrationNumber("DL03EF9999").orElse(null);
+
+		// Fetched directly rather than via client.getClientBillingEntityIds() -- that's a
+		// lazy @ElementCollection and DevDataSeeder.run() has no open Hibernate session.
+		ClientBillingEntity billingEntity = clientBillingEntityRepository
+				.findByGstinAndOrgId("09ABCDE1234F1Z5", orgId)
+				.orElse(null);
+
+		if (client == null || fleetVehicle == null || billingEntity == null) {
+			return;
+		}
+
+		MasterVehicle masterVehicle = masterVehicleRepository.findByOrgId(orgId).stream()
+				.filter(m -> m.getId().equals(fleetVehicle.getMasterVehicleId()))
+				.findFirst()
+				.orElse(null);
+
+		Package pack = masterVehicle == null
+				? null
+				: packageRepository.findByOrgId(orgId).stream()
+						.filter(p -> masterVehicle.getId().equals(p.getMasterVehicleId()))
+						.findFirst()
+						.orElse(null);
+
+		if (pack == null) {
+			return;
+		}
+
+		BookingForm bookingForm = new BookingForm(
+				null,
+				client.getId(),
+				billingEntity.getId(),
+				"Seeded demo duty for driver app testing",
+				GstType.EXEMPT,
+				0,
+				null
+		);
+
+		String bookingId = bookingService.addBooking(bookingForm, orgId).bookingId();
+
+		Instant reportingTime = Instant.now().plus(2, ChronoUnit.HOURS);
+		Instant dropTime = reportingTime.plus(pack.getTime() == null ? 8 : pack.getTime(), ChronoUnit.HOURS);
+
+		AddressSnapshotDTO reportingLocation = new AddressSnapshotDTO(
+				"Farm 47, Umbrella Estate Rd, D Block, Kapas Hera Estate, New Delhi, Delhi 110037, India",
+				"ChIJ13caZtoZDTkReHKnLsCvPAQ", 28.5194283, 77.0910545
+		);
+
+		AddressSnapshotDTO dropLocation = new AddressSnapshotDTO(
+				"Indira Gandhi International Airport, New Delhi, Delhi 110037, India",
+				"ChIJk9OLxvvfDDkRlBddDwqmSlU", 28.5561877, 77.1000420
+		);
+
+		DutyForm dutyForm = new DutyForm(
+				bookingId, null, List.of(), reportingTime, reportingLocation, dropLocation, dropTime,
+				masterVehicle.getId(), null, pack.getId(), "Seeded demo duty -- for driver app local testing"
+		);
+
+		var booking = bookingService.addBookingEntry(dutyForm, orgId);
+		String dutyId = booking.entries().get(booking.entries().size() - 1).dutyId();
+
+		bookingService.confirmBooking(bookingId, orgId);
+
+		AllotDutyCommand allotCommand = new AllotDutyCommand(
+				bookingId, dutyId, null, driver.getId(), fleetVehicle.getId()
+		);
+
+		bookingService.allotDuty(allotCommand, orgId);
 	}
 
 	private void seedGarage() {
