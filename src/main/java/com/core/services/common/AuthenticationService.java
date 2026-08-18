@@ -115,10 +115,7 @@ public class AuthenticationService {
 	 * of re-implemented per account type.
 	 */
 	private String issueOtp(String orgId, String mobileNumber) {
-		UserOtp local = this.userOtpRepository.findByPhone(mobileNumber);
-		if (local != null) {
-			this.userOtpRepository.delete(local);
-		}
+		this.userOtpRepository.deleteByPhone(mobileNumber);
 		String otp = generate6DigitOtp();
 		UserOtp record = new UserOtp();
 		record.setPhone(mobileNumber);

@@ -97,6 +97,29 @@ class AuthenticationServiceDriverTest {
 		verify(smsService, times(1)).sendOtp(eq(ORG_ID), eq(PHONE), anyString(), eq("10"));
 	}
 
+	/*
+	 * Regression test for a real race: issueOtp used to findByPhone() then delete(entity),
+	 * which throws StaleObjectStateException if a concurrent request for the same phone
+	 * (e.g. a double-tapped "Send OTP") already deleted that row. A bulk deleteByPhone()
+	 * has no such expectation, so it must be the one used here -- never findByPhone/delete
+	 * for the issuance path.
+	 */
+	@Test
+	void generateDriverOtp_clearsAnyPriorOtpAtomically_notFindThenDelete() {
+		Driver driver = new Driver();
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+		when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+		when(smsService.sendOtp(eq(ORG_ID), eq(PHONE), anyString(), anyString())).thenReturn(true);
+
+		service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID));
+
+		verify(userOtpRepository, times(1)).deleteByPhone(PHONE);
+		verify(userOtpRepository, never()).findByPhone(PHONE);
+		verify(userOtpRepository, never()).delete(any());
+	}
+
 	@Test
 	void verifyDriverOtp_firstLogin_createsUserAndLinksDriver() {
 		UserOtp otp = validOtpRecord();
