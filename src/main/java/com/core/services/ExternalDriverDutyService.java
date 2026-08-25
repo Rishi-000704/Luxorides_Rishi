@@ -712,13 +712,20 @@ public class ExternalDriverDutyService {
 	 * is genuinely running."
 	 */
 	@Transactional
-	public void submitLocationPing(String rawToken, DriverDutyLocationPingRequest payload) {
+	public DriverDutyLocationResponse submitLocationPing(String rawToken, DriverDutyLocationPingRequest payload) {
 
 		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
 
 		if (entry.getStatus() != DutyStatus.RUNNING) {
-			return;
+			// Not persisted (nothing to track outside an active duty), but still echo the
+			// raw fix back so a caller mid-transition (e.g. driver app) gets a well-formed
+			// response rather than silently guessing why nothing came back.
+			return new DriverDutyLocationResponse(
+					entry.getDutyId(), payload.latitude(), payload.longitude(), payload.headingDegrees(),
+					payload.capturedAt() != null ? payload.capturedAt() : Instant.now(),
+					null, null, false
+			);
 		}
 
 		Instant receivedAt = Instant.now();
@@ -768,19 +775,20 @@ public class ExternalDriverDutyService {
 				location.getSpeedMps()
 		);
 
-		dutyLocationChannelRegistry.broadcast(
+		DriverDutyLocationResponse response = new DriverDutyLocationResponse(
 				entry.getDutyId(),
-				new DriverDutyLocationResponse(
-						entry.getDutyId(),
-						location.getLatitude(),
-						location.getLongitude(),
-						location.getHeadingDegrees(),
-						location.getCapturedAt(),
-						eta.distanceRemainingKm(),
-						eta.etaMinutes(),
-						true
-				)
+				location.getLatitude(),
+				location.getLongitude(),
+				location.getHeadingDegrees(),
+				location.getCapturedAt(),
+				eta.distanceRemainingKm(),
+				eta.etaMinutes(),
+				true
 		);
+
+		dutyLocationChannelRegistry.broadcast(entry.getDutyId(), response);
+
+		return response;
 	}
 
 	/*

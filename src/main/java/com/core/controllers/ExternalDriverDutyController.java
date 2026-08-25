@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.List;
 
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +20,7 @@ import com.core.dtos.driverduty.DriverDutyEndResponse;
 import com.core.dtos.driverduty.DriverDutyIncidentRequest;
 import com.core.dtos.driverduty.DriverDutyIncidentResponse;
 import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
+import com.core.dtos.driverduty.DriverDutyLocationResponse;
 import com.core.dtos.driverduty.DriverDutySosRequest;
 import com.core.dtos.driverduty.DriverDutySosResponse;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
@@ -97,12 +97,11 @@ public class ExternalDriverDutyController {
 	}
 
 	@PostMapping("/{token}/location")
-	public ResponseEntity<Void> submitLocationPing(
+	public DriverDutyLocationResponse submitLocationPing(
 			@PathVariable String token,
 			@RequestBody DriverDutyLocationPingRequest payload
 	) {
-		externalDriverDutyService.submitLocationPing(token, payload);
-		return ResponseEntity.noContent().build();
+		return externalDriverDutyService.submitLocationPing(token, payload);
 	}
 
 	@PostMapping("/{token}/sos")
