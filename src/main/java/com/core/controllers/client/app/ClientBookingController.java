@@ -13,7 +13,13 @@ import org.springframework.web.bind.annotation.*;
 import com.core.dtos.client.app.ClientBookingDTO;
 import com.core.dtos.client.app.ClientBookingDraftDTO;
 import com.core.dtos.client.app.ClientBookingListDTO;
+import com.core.dtos.client.app.CancellationPreviewResponse;
+import com.core.dtos.client.app.ClientCancelBookingRequest;
+import com.core.dtos.client.app.TripRatingRequest;
+import com.core.dtos.client.app.TripRatingResponse;
+import com.core.dtos.client.app.TripShareLinkResponse;
 import com.core.dtos.common.PdfStream;
+import com.core.dtos.driverduty.DriverDutyLocationResponse;
 import com.core.mapper.ClientBookingAssembler;
 import com.core.models.Client;
 import com.core.models.User;
@@ -21,6 +27,7 @@ import com.core.security.SecurityContextUtil;
 import com.core.services.ClientBookingService;
 import com.core.services.ClientService;
 import com.core.services.InvoiceService;
+import com.core.services.TripShareService;
 
 import lombok.RequiredArgsConstructor;
 
@@ -34,6 +41,7 @@ public class ClientBookingController {
 	private final ClientService clientService;
 	private final ClientBookingAssembler clientBookingAssembler;
 	private final InvoiceService invoiceService;
+	private final TripShareService tripShareService;
 
 	/*
 	 * ===================================================== GET – Client Booking
@@ -85,5 +93,69 @@ public class ClientBookingController {
 		PdfStream pdf = invoiceService.getInvoicePdf(invoiceNumber, security.orgId());
 		return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=" + pdf.fileName())
 				.contentType(MediaType.APPLICATION_PDF).contentLength(pdf.contentLength()).body(pdf.resource());
+	}
+
+	/*
+	 * REST fallback for the live-location WebSocket channel -- polled by the
+	 * client after an extended disconnection, or on first render before any
+	 * push has arrived.
+	 */
+	@GetMapping("/duty/{dutyId}/location")
+	@PreAuthorize("isAuthenticated()")
+	public ResponseEntity<DriverDutyLocationResponse> getDutyLocation(@PathVariable String dutyId) {
+		return clientBookingService.getDutyLocation(dutyId, security.orgId())
+				.map(ResponseEntity::ok)
+				.orElseGet(() -> ResponseEntity.noContent().build());
+	}
+
+	/*
+	 * ===================================================== RATING – post-trip
+	 * driver rating (client-authored, one per duty) =====================================================
+	 */
+
+	@PostMapping("/duty/{dutyId}/rating")
+	@PreAuthorize("isAuthenticated()")
+	public TripRatingResponse submitRating(@PathVariable String dutyId, @RequestBody TripRatingRequest request) {
+		Client client = clientService.findByUserId(security.userId());
+		return clientBookingService.submitRating(dutyId, client.getId(), security.orgId(), request);
+	}
+
+	@GetMapping("/duty/{dutyId}/rating")
+	@PreAuthorize("isAuthenticated()")
+	public ResponseEntity<TripRatingResponse> getRating(@PathVariable String dutyId) {
+		return clientBookingService.getRating(dutyId, security.orgId())
+				.map(ResponseEntity::ok)
+				.orElseGet(() -> ResponseEntity.noContent().build());
+	}
+
+	/*
+	 * ===================================================== TRIP SHARING
+	 * =====================================================
+	 */
+
+	@PostMapping("/duty/{dutyId}/share")
+	@PreAuthorize("isAuthenticated()")
+	public TripShareLinkResponse createShareLink(@PathVariable String dutyId) {
+		Client client = clientService.findByUserId(security.userId());
+		return tripShareService.createShareLink(dutyId, client.getId(), security.orgId());
+	}
+
+	/*
+	 * ===================================================== CANCELLATION
+	 * =====================================================
+	 */
+
+	@GetMapping("/{bookingId}/cancel-preview")
+	@PreAuthorize("isAuthenticated()")
+	public CancellationPreviewResponse getCancelPreview(@PathVariable String bookingId) {
+		Client client = clientService.findByUserId(security.userId());
+		return clientBookingService.getCancellationPreview(bookingId, client.getId(), security.orgId());
+	}
+
+	@PostMapping("/{bookingId}/cancel")
+	@PreAuthorize("isAuthenticated()")
+	public void cancelBooking(@PathVariable String bookingId, @RequestBody ClientCancelBookingRequest request) {
+		Client client = clientService.findByUserId(security.userId());
+		clientBookingService.cancelBookingWithPolicy(bookingId, client.getId(), security.orgId(), request.reason());
 	}
 }

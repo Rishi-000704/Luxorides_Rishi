@@ -33,6 +33,7 @@ public class SmsProviderConfigService {
     }
 
     @Transactional
+    @SuppressWarnings("null")
     public SmsProviderConfigResponse upsert(String orgId, SmsProviderConfigRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("SMS provider config request cannot be null");

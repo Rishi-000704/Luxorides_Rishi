@@ -20,6 +20,7 @@ import com.core.dtos.common.PdfStream;
 import com.core.dtos.invoice.ClientPendingListItem;
 import com.core.dtos.invoice.InvoiceListItem;
 import com.core.dtos.invoice.InvoicePendingListItem;
+import com.core.events.BookingBilledEvent;
 import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
 import com.core.location.orchestrator.GeoProviderChain;
@@ -42,6 +43,7 @@ import com.core.repositories.OrgBillingEntityRepository;
 import com.core.services.common.PdfService;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 
 @Service
 @RequiredArgsConstructor
@@ -54,6 +56,7 @@ public class InvoiceService {
 	private final ClientService clientService;
 	private final PdfService pdfService;
 	private final GeoProviderChain geoProviderChain;
+	private final ApplicationEventPublisher eventPublisher;
 
 	/* =============== INVOICE LIST ==================== */
 
@@ -179,6 +182,8 @@ public class InvoiceService {
 		booking.setStatus(BookingStatus.BILLED);
 		booking.setInvoiceNumber(invoice.getInvoiceNumber());
 		bookingRepository.save(booking);
+
+		eventPublisher.publishEvent(new BookingBilledEvent(bookingId, orgId));
 	}
 
 	/* ============== SYNC / RELOAD (SAFE, REPEATABLE) ============== */

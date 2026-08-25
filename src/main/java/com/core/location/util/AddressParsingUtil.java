@@ -112,6 +112,8 @@ public final class AddressParsingUtil {
 
 		List<String> usableParts = parts.subList(0, endIndex + 1);
 
+		boolean skippedState = false;
+
 		for (int i = usableParts.size() - 1; i >= 0; i--) {
 			String cleanedPart = cleanAddressPart(usableParts.get(i));
 
@@ -127,8 +129,15 @@ public final class AddressParsingUtil {
 			 *
 			 * Delhi, India
 			 * Return Delhi because it is both the city and state/UT.
+			 *
+			 * CP, New Delhi, Delhi, India
+			 * Skip only the first state-like segment (Delhi) and return New
+			 * Delhi. Without the skippedState guard, "New Delhi" also aliases
+			 * to the Delhi state/UT, so both segments would be skipped and
+			 * the locality "CP" would be misidentified as the city.
 			 */
-			if (looksLikeState && i > 0) {
+			if (looksLikeState && i > 0 && !skippedState) {
+				skippedState = true;
 				continue;
 			}
 

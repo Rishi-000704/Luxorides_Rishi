@@ -178,6 +178,7 @@ public class GeoProviderChain {
 		return null;
 	}
 
+	@SuppressWarnings("null")
 	private void logProviderFailure(
 			GeoProvider provider,
 			String operation,

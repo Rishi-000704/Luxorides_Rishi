@@ -34,7 +34,7 @@ public class SecurityConfiguration {
 																											// CORS
 																											// configuration
 				.authorizeHttpRequests(auth -> auth
-						.requestMatchers("/auth/**", "/file/**", "/", "/external/**", "/driver-api/**", "/actuator/**", "/estimate-api/**")
+						.requestMatchers("/auth/**", "/file/**", "/", "/external/**", "/driver-api/**", "/actuator/**", "/estimate-api/**", "/ws/**", "/public/**")
 						.permitAll().anyRequest().authenticated())
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authenticationProvider(authenticationProvider)

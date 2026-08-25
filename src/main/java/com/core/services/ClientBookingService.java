@@ -2,6 +2,7 @@ package com.core.services;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 
 import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
@@ -11,14 +12,27 @@ import org.springframework.transaction.annotation.Transactional;
 import com.core.dtos.booking.BookingDTO;
 import com.core.dtos.booking.BookingForm;
 import com.core.dtos.booking.DutyForm;
+import com.core.dtos.client.app.CancellationPreviewResponse;
 import com.core.dtos.client.app.ClientBookingDraftDTO;
+import com.core.dtos.client.app.TripRatingRequest;
+import com.core.dtos.client.app.TripRatingResponse;
+import com.core.dtos.driverduty.DriverDutyLocationResponse;
 import com.core.models.Booking;
+import com.core.models.BookingEntry;
+import com.core.models.Org;
 import com.core.models.Payment;
+import com.core.models.TripRating;
 import com.core.models.embedded.Money;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.Currency;
+import com.core.models.enums.DutyStatus;
 import com.core.models.enums.GstType;
 import com.core.models.enums.PaymentStatus;
+import com.core.repositories.BookingEntryRepository;
+import com.core.repositories.DriverDutyLiveLocationRepository;
+import com.core.repositories.TripRatingRepository;
+import com.core.services.config.OrgService;
+import com.core.util.EtaEstimator;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -29,6 +43,11 @@ import lombok.RequiredArgsConstructor;
 public class ClientBookingService {
 
 	private final BookingService bookingService;
+	private final BookingEntryRepository bookingEntryRepository;
+	private final DriverDutyLiveLocationRepository liveLocationRepository;
+	private final TripRatingRepository tripRatingRepository;
+	private final CancellationPolicyService cancellationPolicyService;
+	private final OrgService orgService;
 
 	@PersistenceContext
 	private EntityManager entityManager;
@@ -110,5 +129,133 @@ public class ClientBookingService {
 	@Transactional(readOnly = true)
 	public Booking getBooking(String bookingId, String orgId) {
 		return bookingService.getBooking(bookingId, orgId);
+	}
+
+	/*
+	 * REST fallback for the live-location WebSocket channel -- used when a
+	 * client reconnects after a gap, or opens the booking detail view before
+	 * any push has arrived yet. Org-scoped the same way the booking-detail
+	 * endpoint and the WS handshake for this channel both are.
+	 */
+	@Transactional(readOnly = true)
+	public Optional<DriverDutyLocationResponse> getDutyLocation(String dutyId, String orgId) {
+		BookingEntry entry = bookingEntryRepository.findByDutyIdAndOrgId(dutyId, orgId)
+				.orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, "Duty not found"));
+
+		return liveLocationRepository.findByDutyId(entry.getDutyId())
+				.map(location -> {
+					EtaEstimator.Estimate eta = EtaEstimator.estimate(
+							entry.getDropLocation(),
+							location.getLatitude(),
+							location.getLongitude(),
+							location.getSpeedMps()
+					);
+
+					return new DriverDutyLocationResponse(
+							location.getDutyId(),
+							location.getLatitude(),
+							location.getLongitude(),
+							location.getHeadingDegrees(),
+							location.getCapturedAt(),
+							eta.distanceRemainingKm(),
+							eta.etaMinutes(),
+							true
+					);
+				});
+	}
+
+	/*
+	 * ================= TRIP RATING =================
+	 * One rating per duty, allowed only once the duty is COMPLETED and only
+	 * by the client who owns the booking -- both checked here, not just at
+	 * the controller layer.
+	 */
+	@Transactional
+	public TripRatingResponse submitRating(String dutyId, String clientId, String orgId, TripRatingRequest request) {
+		if (request.stars() == null || request.stars() < 1 || request.stars() > 5) {
+			throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Rating must be between 1 and 5 stars");
+		}
+
+		BookingEntry entry = bookingEntryRepository.findByDutyIdAndOrgId(dutyId, orgId)
+				.orElseThrow(() -> new BusinessException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
+
+		if (!clientId.equals(entry.getBooking().getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "This duty does not belong to you");
+		}
+
+		if (entry.getStatus() != DutyStatus.COMPLETED) {
+			throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Duty must be completed before it can be rated");
+		}
+
+		if (tripRatingRepository.existsByDutyIdAndOrgId(dutyId, orgId)) {
+			throw new BusinessException(ErrorCode.VALIDATION_ERROR, "This duty has already been rated");
+		}
+
+		TripRating rating = new TripRating();
+		rating.setOrgId(orgId);
+		rating.setBookingId(entry.getBooking().getBookingId());
+		rating.setDutyId(dutyId);
+		rating.setClientId(clientId);
+		rating.setDriverId(entry.getDriverId());
+		rating.setBookingEntry(entry);
+		rating.setStars(request.stars());
+		rating.setComment(request.comment());
+
+		TripRating saved = tripRatingRepository.save(rating);
+
+		return new TripRatingResponse(saved.getDutyId(), saved.getStars(), saved.getComment(), saved.getCreatedAt());
+	}
+
+	@Transactional(readOnly = true)
+	public Optional<TripRatingResponse> getRating(String dutyId, String orgId) {
+		return tripRatingRepository.findByDutyIdAndOrgId(dutyId, orgId)
+				.map(r -> new TripRatingResponse(r.getDutyId(), r.getStars(), r.getComment(), r.getCreatedAt()));
+	}
+
+	/*
+	 * ================= CANCELLATION =================
+	 */
+
+	@Transactional(readOnly = true)
+	public CancellationPreviewResponse getCancellationPreview(String bookingId, String clientId, String orgId) {
+		Booking booking = getOwnedCancellableBooking(bookingId, clientId, orgId);
+		Org org = orgService.getOrg(orgId);
+
+		CancellationPolicyService.Evaluation evaluation = cancellationPolicyService.evaluate(booking, org);
+
+		return new CancellationPreviewResponse(
+				evaluation.withinFreeWindow(),
+				evaluation.paidAmount(),
+				evaluation.feeAmount(),
+				evaluation.refundAmount(),
+				evaluation.freeWindowHours(),
+				evaluation.feePercent()
+		);
+	}
+
+	@Transactional
+	public void cancelBookingWithPolicy(String bookingId, String clientId, String orgId, String reason) {
+		Booking booking = getOwnedCancellableBooking(bookingId, clientId, orgId);
+		Org org = orgService.getOrg(orgId);
+
+		CancellationPolicyService.Evaluation evaluation = cancellationPolicyService.evaluate(booking, org);
+
+		bookingService.cancelBooking(bookingId, orgId, reason, evaluation.feeAmount());
+	}
+
+	private Booking getOwnedCancellableBooking(String bookingId, String clientId, String orgId) {
+		Booking booking = bookingService.getBooking(bookingId, orgId);
+
+		if (!clientId.equals(booking.getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "This booking does not belong to you");
+		}
+
+		if (booking.getStatus() != BookingStatus.CONFIRMED && booking.getStatus() != BookingStatus.RUNNING) {
+			throw new BusinessException(
+					ErrorCode.CANCELLATION_NOT_ALLOWED,
+					"Booking cannot be cancelled when status is " + booking.getStatus());
+		}
+
+		return booking;
 	}
 }

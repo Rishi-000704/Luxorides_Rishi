@@ -185,6 +185,55 @@ public class RazorpayPaymentService {
 		}
 	}
 
+	/* ================= REFUND (admin-approved only -- see RefundRequestService) ================= */
+
+	/*
+	 * Real first-ever use of the SDK's refund API in this codebase (confirmed
+	 * by prior research -- razorpayClient.payments.refund was never called
+	 * anywhere before this). Only ever invoked from RefundRequestService.approve,
+	 * itself only reachable via an employee explicitly approving a
+	 * PENDING_REVIEW RefundRequest -- never automatically on cancellation.
+	 */
+	public String refundPayment(String orgId, String bookingId, BigDecimal refundAmount) throws Exception {
+
+		RazorpayCredentials credentials = razorpayClientFactory.credentials(orgId);
+		RazorpayClient razorpayClient = razorpayClientFactory.client(credentials);
+
+		Booking booking = bookingRepo.findByBookingIdAndOrgId(bookingId, orgId)
+				.orElseThrow(() -> new IllegalStateException("Booking not found"));
+
+		Payment confirmedPayment = booking.getPayments().stream()
+				.filter(p -> p.getStatus() == PaymentStatus.CONFIRMED)
+				.filter(p -> p.getGatewayPaymentId() != null && !p.getGatewayPaymentId().isBlank())
+				.findFirst()
+				.orElseThrow(() -> new IllegalStateException(
+						"No confirmed gateway payment found on this booking to refund"));
+
+		long amountInPaise = refundAmount
+				.setScale(2, RoundingMode.HALF_UP)
+				.multiply(BigDecimal.valueOf(100))
+				.longValueExact();
+
+		JSONObject refundRequest = new JSONObject();
+		refundRequest.put("amount", amountInPaise);
+
+		JSONObject notes = new JSONObject();
+		notes.put("source", "FLEETOVO_REFUND_REQUEST");
+		notes.put("orgId", orgId);
+		notes.put("bookingId", bookingId);
+		refundRequest.put("notes", notes);
+
+		com.razorpay.Refund refund = razorpayClient.payments.refund(
+				confirmedPayment.getGatewayPaymentId(), refundRequest);
+
+		String refundId = refund.get("id");
+
+		confirmedPayment.setStatus(PaymentStatus.REFUNDED);
+		paymentRepo.save(confirmedPayment);
+
+		return refundId;
+	}
+
 	/* ================= AMOUNT ================= */
 
 	private Money calculatePendingAmount(Booking booking) {

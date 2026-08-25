@@ -80,6 +80,7 @@ public class FleetVehicleController {
 
 	@GetMapping("/page")
 	@PreAuthorize("hasAuthority('FLEET_VEHICLE_VIEW')")
+	@SuppressWarnings("null")
 	public Page<FleetVehicleDTO> page(@RequestParam(required = false) String search,
 			@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "10") int size,
 			@RequestParam(defaultValue = "createdAt") String sortBy,

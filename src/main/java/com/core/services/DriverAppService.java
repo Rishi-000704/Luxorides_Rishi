@@ -15,6 +15,7 @@ import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
 import com.core.models.BookingEntry;
 import com.core.models.Driver;
+import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.DriverRepository;
@@ -37,6 +38,7 @@ import lombok.RequiredArgsConstructor;
 public class DriverAppService {
 
 	private static final List<DutyStatus> ACTIVE_STATUSES = List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING);
+	private static final List<BookingStatus> ACTIVE_BOOKING_STATUSES = List.of(BookingStatus.CONFIRMED, BookingStatus.RUNNING);
 
 	private final BookingEntryRepository bookingEntryRepository;
 	private final DriverRepository driverRepository;
@@ -46,7 +48,7 @@ public class DriverAppService {
 	public Page<DutySummaryForDriverDTO> getActiveDuties(String orgId, String userId, Pageable pageable) {
 		Driver driver = resolveDriver(orgId, userId);
 		return bookingEntryRepository
-				.findActiveDutiesForDriver(orgId, driver.getId(), ACTIVE_STATUSES, pageable)
+				.findActiveDutiesForDriver(orgId, driver.getId(), ACTIVE_STATUSES, ACTIVE_BOOKING_STATUSES, pageable)
 				.map(this::toSummary);
 	}
 
@@ -73,6 +75,19 @@ public class DriverAppService {
 			throw new BusinessException(
 					ErrorCode.INVALID_DUTY_STATUS,
 					"This duty is not available for execution right now (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		// A duty can be individually ALLOTTED/RUNNING while its parent booking has already
+		// closed out (e.g. a duty added to an already-invoiced, COMPLETED booking -- see
+		// BookingService#reopenCompletedBookingAfterDutyAdded). Catch that mismatch here with
+		// the same friendly, typed error the active-duties list check uses, instead of letting
+		// the driver reach the execute screen and hit ExternalDriverDutyService's raw
+		// booking-status exception.
+		if (!ACTIVE_BOOKING_STATUSES.contains(entry.getBooking().getStatus())) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"This duty is not available for execution right now (booking status: " + entry.getBooking().getStatus() + ")"
 			);
 		}
 
@@ -111,6 +126,7 @@ public class DriverAppService {
 				e.getStatus(),
 
 				e.getBooking().getClient() != null ? e.getBooking().getClient().getName().getDisplayName() : null,
+				e.getBooking().getClient() != null ? e.getBooking().getClient().getPhone() : null,
 				e.getAllotedVehicle() != null && e.getAllotedVehicle().getMasterVehicle() != null
 						? e.getAllotedVehicle().getMasterVehicle().getName()
 						: null,

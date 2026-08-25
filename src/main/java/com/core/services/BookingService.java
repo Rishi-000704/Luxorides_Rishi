@@ -27,6 +27,7 @@ import com.core.events.BookingCompletedEvent;
 import com.core.events.BookingConfirmedEvent;
 import com.core.events.DutyAllottedEvent;
 import com.core.events.DutyClosedEvent;
+import com.core.events.DutyEntryCompletedEvent;
 import com.core.events.DutyReAllottedEvent;
 import com.core.events.DutyReClosedEvent;
 import com.core.events.PaymentConfirmedEvent;
@@ -112,6 +113,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO updateBooking(BookingForm form, String orgId) {
 		Booking booking = getBookingForUpdate(form.bookingId(), orgId);
 
@@ -134,6 +136,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public void confirmBooking(String bookingId, String orgId) {
 		Booking booking = getBookingForUpdate(bookingId, orgId);
 
@@ -156,6 +159,21 @@ public class BookingService {
 
 	@Transactional
 	public void cancelBooking(String bookingId, String orgId, String reason) {
+		cancelBooking(bookingId, orgId, reason, BigDecimal.ZERO);
+	}
+
+	/*
+	 * cancellationFeeAmount is deducted from the paid amount when
+	 * RefundInitiatedListener creates the admin-reviewed RefundRequest --
+	 * BigDecimal.ZERO here (the 3-arg overload above, used by the employee
+	 * cancellation endpoint) means "full refund, no fee", unchanged from
+	 * this method's original behavior. The client-facing cancellation flow
+	 * (ClientBookingService.cancelBookingWithPolicy) is the only caller that
+	 * passes a nonzero fee, computed by CancellationPolicyService.
+	 */
+	@Transactional
+	@SuppressWarnings("null")
+	public void cancelBooking(String bookingId, String orgId, String reason, BigDecimal cancellationFeeAmount) {
 		Booking booking = getBookingForUpdate(bookingId, orgId);
 
 		booking.setStatus(BookingStatus.CANCELLED);
@@ -167,20 +185,44 @@ public class BookingService {
 		BookingCancelledEvent cancelevent = bookingEventAssembler.toBookingCancelledEvent(booking, reason);
 		eventPublisher.publishEvent(cancelevent);
 
-		RefundInitiatedEvent refundevent = refundEventAssembler.toRefundInitiatedEvent(booking);
+		RefundInitiatedEvent refundevent = refundEventAssembler.toRefundInitiatedEvent(booking, cancellationFeeAmount);
 		eventPublisher.publishEvent(refundevent);
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public void completeBooking(String bookingId, String orgId) {
 		Booking booking = getBookingForUpdate(bookingId, orgId);
 
+		if (!allDutiesCompleted(booking)) {
+			throw new BusinessException(ErrorCode.DUTIES_NOT_COMPLETED, "Each duty must be completed.");
+		}
+
+		completeBookingInternal(booking, orgId);
+	}
+
+	/*
+	 * Shared by completeBooking() above and finalizeBookingAfterDutyCompletion()
+	 * below. Deliberately does NOT re-derive "are all duties completed" from a
+	 * fresh read of booking.getEntries() -- unlike completeBooking()'s own check,
+	 * which is safe because it always runs in a request with no other in-flight
+	 * transaction touching this booking. finalizeBookingAfterDutyCompletion runs
+	 * in its own REQUIRES_NEW transaction while ExternalDriverDutyService.submitEnd's
+	 * transaction (which just flipped the completed entry's status) is still open
+	 * and uncommitted, so a fresh read here would see the pre-update entries under
+	 * REPEATABLE READ and wrongly throw DUTIES_NOT_COMPLETED. submitEnd already
+	 * computed that correctly in-memory (its entry and this booking's entries
+	 * collection are the same identity-mapped objects within its own persistence
+	 * context) -- that's the anyOpenDuty flag callers must pass in instead.
+	 */
+	@SuppressWarnings("null")
+	private Booking completeBookingInternal(Booking booking, String orgId) {
 		if (booking.getStatus() == BookingStatus.BILLED) {
 			throw new BusinessException(ErrorCode.BOOKING_ALREADY_BILLED, "Booking is already billed.");
 		}
 
 		if (booking.getStatus() == BookingStatus.COMPLETED) {
-			return;
+			return booking;
 		}
 
 		ensureBookingStatus(
@@ -189,19 +231,48 @@ public class BookingService {
 				"complete booking"
 		);
 
-		if (!allDutiesCompleted(booking)) {
-			throw new BusinessException(ErrorCode.DUTIES_NOT_COMPLETED, "Each duty must be completed.");
+		booking.setStatus(BookingStatus.COMPLETED);
+		Booking saved = bookingRepository.save(BookingUtil.calculateTotalAmount(booking));
+
+		eventPublisher.publishEvent(new BookingCompletedEvent(saved.getBookingId(), orgId));
+
+		return saved;
+	}
+
+	/*
+	 * Called from ExternalDriverDutyService.completeDutyEntryAndFinalizeBooking,
+	 * which is that class's own top-level transaction for "mark this duty entry
+	 * COMPLETED and, if needed, complete the booking" -- deliberately plain
+	 * REQUIRED (joins the caller), not REQUIRES_NEW. anyOpenDuty=false means the
+	 * caller just flipped the last open entry's status to COMPLETED, in the SAME
+	 * persistence context this call needs to see; a separate transaction
+	 * (REQUIRES_NEW) would read that entry fresh from the DB under REPEATABLE
+	 * READ and, since the caller's update is still uncommitted, see it as not
+	 * yet completed. Booking.status=COMPLETED must also never commit unless the
+	 * entry update it depends on commits too -- REQUIRES_NEW would let this
+	 * commit independently and leave the two inconsistent if anything the
+	 * caller does afterward (in the same transaction) then fails.
+	 */
+	@Transactional
+	public Booking finalizeBookingAfterDutyCompletion(String bookingId, String dutyId, boolean anyOpenDuty,
+			String orgId) {
+
+		Booking booking = getBookingForUpdate(bookingId, orgId);
+
+		eventPublisher.publishEvent(new DutyEntryCompletedEvent(bookingId, dutyId, orgId));
+
+		if (anyOpenDuty) {
+			booking.setStatus(BookingStatus.RUNNING);
+			return bookingRepository.save(BookingUtil.calculateTotalAmount(booking));
 		}
 
-		booking.setStatus(BookingStatus.COMPLETED);
-		booking = bookingRepository.save(BookingUtil.calculateTotalAmount(booking));
-
-		eventPublisher.publishEvent(new BookingCompletedEvent(booking.getBookingId(), orgId));
+		return completeBookingInternal(booking, orgId);
 	}
 
 	/* ==================== BOOKING ENTRY ======================== */
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO addBookingEntry(DutyForm form, String orgId) {
 		Booking booking = getBookingForUpdate(form.bookingId(), orgId);
 
@@ -239,6 +310,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO updateBookingEntry(DutyForm form, String orgId) {
 		if (form.bookingId() == null) {
 			throw new BusinessException(ErrorCode.BOOKING_ID_REQUIRED, "provided booking ID cannot be null.");
@@ -293,6 +365,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO allotDuty(AllotDutyCommand cmd, String orgId) {
 		Booking booking = getBookingForUpdate(cmd.bookingId(), orgId);
 
@@ -327,6 +400,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO reAllotDuty(AllotDutyCommand cmd, String orgId) {
 		Booking booking = getBookingForUpdate(cmd.bookingId(), orgId);
 
@@ -486,7 +560,7 @@ public class BookingService {
 						entry
 				);
 
-		eventPublisher.publishEvent(dutyClosedEvent);
+		publishEvent(dutyClosedEvent);
 
 		if (booking.getStatus() == BookingStatus.COMPLETED
 				&& previousBookingStatus != BookingStatus.COMPLETED) {
@@ -687,7 +761,7 @@ public class BookingService {
 						entry
 				);
 
-		eventPublisher.publishEvent(dutyReClosedEvent);
+		publishEvent(dutyReClosedEvent);
 
 		/*
 		 * Publish booking completion only when this operation changes the
@@ -775,6 +849,7 @@ public class BookingService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public BookingDTO confirmPayment(String bookingId, String paymentId, String orgId) {
 		Booking booking = getBookingForUpdate(bookingId, orgId);
 
@@ -818,6 +893,7 @@ public class BookingService {
 	}
 
 	@Transactional(readOnly = true)
+	@SuppressWarnings("null")
 	public PageResult<BookingListItem> getPage(String orgId, BookingPageRequest request) {
 		String sortBy = resolveBookingSortBy(request.sortBy());
 		Sort.Direction direction = request.direction();
@@ -855,6 +931,7 @@ public class BookingService {
 	}
 
 	@Transactional(readOnly = true)
+	@SuppressWarnings("null")
 	public PageResult<DutyListItem> getDutyPage(String orgId, DutyPageRequest request) {
 		String sortBy = resolveDutySortBy(request.sortBy());
 		Sort.Direction direction = request.direction();
@@ -881,6 +958,7 @@ public class BookingService {
 	/* ================================= HELPERS ======================= */
 
 	@Transactional(readOnly = true)
+	@SuppressWarnings("null")
 	Package getPackage(String packageId) {
 		return this.packageRepository.findById(packageId).orElse(null);
 	}
@@ -891,6 +969,18 @@ public class BookingService {
 				.filter(e -> e.getDutyId().equals(dutyId))
 				.findFirst()
 				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
+	}
+
+	/*
+	 * ApplicationEventPublisher.publishEvent(Object) lives in a @NonNullApi package, so
+	 * Eclipse's null analysis flags every call site in the large closeDuty/reCloseDuty
+	 * methods below as needing an unchecked conversion, even though the event is never
+	 * null. Routed through this tiny helper so the suppression stays scoped instead of
+	 * blanketing those large methods.
+	 */
+	@SuppressWarnings("null")
+	private void publishEvent(Object event) {
+		eventPublisher.publishEvent(event);
 	}
 
 	private BigDecimal normalizeDiscount(BigDecimal discountAmount) {
@@ -1103,13 +1193,6 @@ public class BookingService {
 				&& booking.getEntries()
 				.stream()
 				.allMatch(entry -> entry.getStatus() == DutyStatus.COMPLETED);
-	}
-
-	private boolean hasOpenDuties(Booking booking) {
-		return booking.getEntries() != null
-				&& booking.getEntries()
-				.stream()
-				.anyMatch(entry -> entry.getStatus() != DutyStatus.COMPLETED);
 	}
 
 	private String statusName(Enum<?> status) {

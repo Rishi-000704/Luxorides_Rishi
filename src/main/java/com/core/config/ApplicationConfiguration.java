@@ -26,6 +26,7 @@ public class ApplicationConfiguration {
 	}
 
 	@Bean
+	@SuppressWarnings("null")
 	UserDetailsService userDetailsService() {
 		try {
 			return username -> userRepo.findById(username)

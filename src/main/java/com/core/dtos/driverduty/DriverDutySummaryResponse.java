@@ -8,6 +8,7 @@ public record DriverDutySummaryResponse(
 		String currentRequiredAction,
 
 		String clientName,
+		String clientPhone,
 		String driverName,
 		String vehicleName,
 		String vehicleNumber,

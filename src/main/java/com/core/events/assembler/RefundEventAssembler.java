@@ -14,12 +14,19 @@ import com.core.models.enums.PaymentStatus;
 public class RefundEventAssembler {
 
 	public RefundInitiatedEvent toRefundInitiatedEvent(Booking booking) {
+		return toRefundInitiatedEvent(booking, BigDecimal.ZERO);
+	}
+
+	public RefundInitiatedEvent toRefundInitiatedEvent(Booking booking, BigDecimal cancellationFeeAmount) {
 		BigDecimal paidAmount = BigDecimal.ZERO;
 		for (Payment p : booking.getPayments()) {
 			if (p.getStatus().equals(PaymentStatus.CONFIRMED)) {
 				paidAmount = paidAmount.add(p.getReceivedAmount().getAmount().add(p.getTds().getAmount()));
 			}
 		}
+
+		BigDecimal fee = cancellationFeeAmount == null ? BigDecimal.ZERO : cancellationFeeAmount;
+
 		return new RefundInitiatedEvent(
 				booking.getOrgId(),
 				booking.getClient().getEmail(), booking.getClient().getPhone(),
@@ -27,7 +34,8 @@ public class RefundEventAssembler {
 
 				booking.getBookingId(),
 
-				paidAmount.toString());
+				paidAmount.toString(),
+				fee.toString());
 	}
 
 	public RefundCompletedEvent toRefundCompletedEvent(Booking booking) {

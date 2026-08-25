@@ -28,6 +28,7 @@ public record ClientBookingDTO(
 			String vehicleName, String vehiclePic, String vehicleNumber, String brand, String category,
 
 			String driverName, String driverPic, String driverGender, String driverPhone,
+			Double driverRatingAverage, Long driverRatingCount,
 
 			String reportingLocation, Instant reportingTime, Integer startingKM, Instant startAt,
 

@@ -3,15 +3,16 @@ package com.core.services;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -20,24 +21,31 @@ import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
 import com.core.dtos.driverduty.DriverDutyExpenseInput;
 import com.core.dtos.driverduty.DriverDutyLinkResponse;
+import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
+import com.core.dtos.driverduty.DriverDutyLocationResponse;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
 import com.core.dtos.driverduty.DutyCompletionSummary;
 import com.core.dtos.driverduty.PaymentInstruction;
+import com.core.dtos.driverduty.ReturnRouteEstimate;
+import com.core.events.DutyStartedEvent;
 import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
+import com.core.gateway.mock.MockPaymentService;
 import com.core.gateway.razerpay.QrPaymentStatusResponse;
 import com.core.gateway.razerpay.RazorpayPaymentService;
 import com.core.gateway.razerpay.RazorpayQrPayload;
 import com.core.location.api.DistanceTimeResult;
+import com.core.location.api.GeoPoint;
 import com.core.location.api.LocationService;
 import com.core.models.Booking;
 import com.core.models.BookingEntry;
 import com.core.models.DriverDutyAccessToken;
 import com.core.models.DriverDutyCheckpoint;
 import com.core.models.DriverDutyExpense;
+import com.core.models.DriverDutyLiveLocation;
 import com.core.models.ExtraCharge;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.embedded.Money;
@@ -48,14 +56,18 @@ import com.core.models.enums.DriverDutyExpenseStatus;
 import com.core.models.enums.DriverDutyExpenseType;
 import com.core.models.enums.DriverDutyTokenStatus;
 import com.core.models.enums.DutyStatus;
+import com.core.models.enums.PaymentGateway;
 import com.core.models.enums.PaymentStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.BookingRepository;
 import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
+import com.core.repositories.DriverDutyLiveLocationRepository;
 import com.core.services.common.FileService;
 import com.core.util.BookingUtil;
+import com.core.util.EtaEstimator;
+import com.core.ws.DutyLocationChannelRegistry;
 
 import lombok.RequiredArgsConstructor;
 
@@ -73,6 +85,13 @@ public class ExternalDriverDutyService {
 	private final FileService fileService;
 	private final BookingService bookingService;
 	private final RazorpayPaymentService razorpayPaymentService;
+	private final MockPaymentService mockPaymentService;
+	private final PaymentGatewayConfigService paymentGatewayConfigService;
+	private final DriverDutyTokenValidator tokenValidator;
+	private final ApplicationEventPublisher eventPublisher;
+	private final DriverDutyLiveLocationRepository liveLocationRepository;
+	private final DutyLocationChannelRegistry dutyLocationChannelRegistry;
+	private final FraudSignalService fraudSignalService;
 
 	/*
 	 * Use LocationService here instead of directly injecting GeoProvider.
@@ -80,6 +99,18 @@ public class ExternalDriverDutyService {
 	 * when GoogleGeoProvider + FallbackGeoProvider both exist.
 	 */
 	private final LocationService locationService;
+
+	/*
+	 * Self-reference to reach completeDutyEntryAndFinalizeBooking through the
+	 * Spring proxy instead of a plain same-class method call -- a direct
+	 * `this.completeDutyEntryAndFinalizeBooking(...)` call bypasses Spring AOP
+	 * entirely, so its @Transactional would silently do nothing. ObjectProvider
+	 * (rather than injecting this type directly) defers the lookup until
+	 * .getObject() is actually called, which sidesteps the circular-dependency
+	 * a bean depending on its own bean definition would otherwise hit at
+	 * construction time.
+	 */
+	private final ObjectProvider<ExternalDriverDutyService> self;
 
 	private String driverDutyPublicUrl = "https://sandbox.fleetovo.com/extrenal";
 
@@ -130,7 +161,7 @@ public class ExternalDriverDutyService {
 		accessToken.setDutyId(entry.getDutyId());
 		accessToken.setDriverId(entry.getDriverId());
 		accessToken.setBookingEntry(entry);
-		accessToken.setTokenHash(hash(rawToken));
+		accessToken.setTokenHash(tokenValidator.hash(rawToken));
 		accessToken.setStatus(DriverDutyTokenStatus.ACTIVE);
 		accessToken.setExpiresAt(calculateDriverDutyLinkExpiry(entry));
 
@@ -154,7 +185,7 @@ public class ExternalDriverDutyService {
 
 	@Transactional
 	public DriverDutySummaryResponse getDutySummary(String rawToken) {
-		DriverDutyAccessToken accessToken = resolveValidToken(rawToken);
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
 
 		boolean started = checkpointRepository.existsByBookingEntry_IdAndCheckpointType(
@@ -176,6 +207,10 @@ public class ExternalDriverDutyService {
 
 				entry.getBooking().getClient() != null
 						? entry.getBooking().getClient().getName().getDisplayName()
+						: null,
+
+				entry.getBooking().getClient() != null
+						? entry.getBooking().getClient().getPhone()
 						: null,
 
 				entry.getDriver() != null
@@ -224,11 +259,9 @@ public class ExternalDriverDutyService {
 			String userAgent
 	) throws IOException {
 
-		DriverDutyAccessToken accessToken = resolveValidToken(rawToken);
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 
-		BookingEntry entry = bookingEntryRepository
-				.lockByDutyIdAndOrgId(accessToken.getDutyId(), accessToken.getOrgId())
-				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
 
 		Booking booking = entry.getBooking();
 
@@ -302,6 +335,9 @@ public class ExternalDriverDutyService {
 		bookingEntryRepository.save(entry);
 		bookingRepository.save(booking);
 
+		eventPublisher.publishEvent(
+				new DutyStartedEvent(booking.getBookingId(), entry.getDutyId(), accessToken.getOrgId()));
+
 		accessToken.setLastUsedAt(submittedAt);
 		tokenRepository.save(accessToken);
 
@@ -320,7 +356,6 @@ public class ExternalDriverDutyService {
 	 * =========================================================
 	 */
 
-	@Transactional
 	public DriverDutyEndResponse submitEnd(
 			String rawToken,
 			DriverDutyEndRequest request,
@@ -330,11 +365,197 @@ public class ExternalDriverDutyService {
 			String userAgent
 	) throws IOException {
 
-		DriverDutyAccessToken accessToken = resolveValidToken(rawToken);
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 
-		BookingEntry entry = bookingEntryRepository
-				.lockByDutyIdAndOrgId(accessToken.getDutyId(), accessToken.getOrgId())
-				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
+		AddressSnapshot dropLocation = normalizeDriverLocation(request.location());
+		String photoName = saveImage(odometerPhoto);
+
+		/*
+		 * Everything that touches the duty entry or booking row happens inside
+		 * this one call, as one atomic transaction -- see its own comment for
+		 * why it can't be submitEnd's own (still-open, spanning the QR call
+		 * below) transaction, and can't be split into two.
+		 */
+		DutyCompletionResult completion = self.getObject().completeDutyEntryAndFinalizeBooking(
+				accessToken, request, dropLocation, photoName, receiptPhotos, ipAddress, userAgent);
+
+		BookingEntry entry = completion.entry();
+		GarageReturnEstimate garageReturn = completion.garageReturn();
+		BigDecimal extraTotal = completion.extraTotal();
+
+		accessToken.setLastUsedAt(completion.actualDropSubmittedAt());
+		accessToken.setStatus(DriverDutyTokenStatus.COMPLETED);
+		tokenRepository.save(accessToken);
+
+		/*
+		 * completeDutyEntryAndFinalizeBooking's transaction has already
+		 * committed by the time control returns here (self.getObject() went
+		 * through the Spring proxy, so the method boundary is real), so this
+		 * is a fresh, non-lazy read -- not reuse of a detached entity from
+		 * that closed session.
+		 */
+		Booking savedBooking = bookingRepository
+				.findByBookingIdAndOrgId(completion.bookingId(), accessToken.getOrgId())
+				.orElseThrow(() -> new NotFoundException(ErrorCode.BOOKING_NOT_FOUND, "Booking not found"));
+
+		BigDecimal amountToCollect = calculatePendingAmount(savedBooking);
+
+		PaymentInstruction instruction;
+
+		if (amountToCollect.compareTo(BigDecimal.ZERO) > 0) {
+			try {
+				boolean mockGateway = resolveEffectiveGateway(accessToken.getOrgId()) == PaymentGateway.MOCK;
+
+				RazorpayQrPayload qrPayload = mockGateway
+						? mockPaymentService.generateMockQr(
+								accessToken.getOrgId(),
+								savedBooking.getBookingId(),
+								entry.getDutyId(),
+								amountToCollect
+						)
+						: razorpayPaymentService.generateQR(
+								accessToken.getOrgId(),
+								savedBooking.getBookingId(),
+								entry.getDutyId(),
+								amountToCollect
+						);
+
+				String qrDisplayValue = firstNonBlank(
+						qrPayload.getQrImageContent(),
+						qrPayload.getQrImageUrl()
+				);
+
+				instruction = mockGateway
+						? new PaymentInstruction(
+								true,
+								amountToCollect,
+								qrDisplayValue,
+								"MOCK_PAYMENT_AUTO_CONFIRMED",
+								"Dummy payment auto-confirmed (MOCK gateway) -- no real money collected"
+						)
+						: new PaymentInstruction(
+								true,
+								amountToCollect,
+								qrDisplayValue,
+								"RAZORPAY_UPI_QR_IMAGE",
+								"Collect payment from client"
+						);
+
+			} catch (Exception ex) {
+				ex.printStackTrace();
+
+				instruction = new PaymentInstruction(
+						true,
+						amountToCollect,
+						null,
+						"QR_GENERATION_FAILED",
+						"Payment is pending, but QR could not be generated"
+				);
+			}
+		} else {
+			instruction = new PaymentInstruction(
+					false,
+					amountToCollect,
+					null,
+					"NO_PAYMENT_REQUIRED",
+					"No payment collection required"
+			);
+		}
+
+		int actualDrivenKm = request.odometerKm() - entry.getStartingKM();
+		double projectedTotalKm = actualDrivenKm + garageReturn.rawDistanceKm();
+
+		ReturnRouteEstimate returnRoute = new ReturnRouteEstimate(
+				garageReturn.rawDistanceKm(),
+				garageReturn.durationSeconds(),
+				garageReturn.provider(),
+				garageReturn.routeAvailable(),
+				toGeoPoint(dropLocation),
+				toGeoPoint(resolveGarageLocation(entry)),
+				garageReturn.routeGeometry()
+		);
+
+		DutyCompletionSummary summary = new DutyCompletionSummary(
+				savedBooking.getBookingId(),
+				entry.getDutyId(),
+				entry.getStartingKM(),
+				entry.getClosingKM(),
+				entry.getClosingKM() - entry.getStartingKM(),
+				entry.getStartAt(),
+				entry.getEndAt(),
+				extraTotal,
+				savedBooking.getTotal().getAmount(),
+				amountToCollect,
+				actualDrivenKm,
+				projectedTotalKm,
+				returnRoute
+		);
+
+		return new DriverDutyEndResponse(
+				true,
+				entry.getStatus().name(),
+				summary,
+				instruction,
+				"Duty completed successfully"
+		);
+	}
+
+	private record DutyCompletionResult(
+			BookingEntry entry,
+			String bookingId,
+			GarageReturnEstimate garageReturn,
+			BigDecimal extraTotal,
+			Instant actualDropSubmittedAt
+	) {
+	}
+
+	/*
+	 * The single atomic transaction for "mark this duty entry COMPLETED and,
+	 * if it was the last open duty, complete the booking too." Must be called
+	 * through the Spring proxy (submitEnd does this via self.getObject(), never
+	 * directly) for @Transactional to actually apply.
+	 *
+	 * This used to be inlined in submitEnd itself, wrapped by submitEnd's own
+	 * transaction all the way through payment-QR generation. That caused two
+	 * separate bugs, both reproduced live against the dev backend while fixing
+	 * the payment-QR MySQL lock-wait-timeout:
+	 *
+	 * 1. Lock timeout: submitEnd's own transaction stayed open through the QR
+	 *    call, so any lock it held on the booking row was still held when QR
+	 *    generation (its own REQUIRES_NEW transaction) needed a shared lock on
+	 *    that same row for the Payment insert's FK check. Not a cycle MySQL's
+	 *    deadlock detector can see (one side is just Java code waiting on the
+	 *    other call to return), so it only ever resolved via
+	 *    innodb_lock_wait_timeout.
+	 *
+	 * 2. Data corruption if fixed the *wrong* way: making ONLY the
+	 *    booking-finalize step REQUIRES_NEW (to release its lock early) breaks
+	 *    atomicity between the entry update and the booking completion -- if
+	 *    anything in submitEnd fails AFTER that REQUIRES_NEW call returns
+	 *    (which is exactly what happened here: a LazyInitializationException a
+	 *    few lines later), the booking-completion sub-transaction had ALREADY
+	 *    committed independently, leaving a live booking marked COMPLETED
+	 *    whose only duty entry was rolled back to RUNNING. Reproduced directly
+	 *    against the dev DB before this method existed.
+	 *
+	 * The fix for both: this method is the ONLY transaction boundary for the
+	 * whole unit of work (entry lock/update + checkpoint + expenses + booking
+	 * finalize), it fully commits before returning, and submitEnd only
+	 * proceeds to QR generation afterward, with no ambient transaction of its
+	 * own left open to conflict with it.
+	 */
+	@Transactional
+	DutyCompletionResult completeDutyEntryAndFinalizeBooking(
+			DriverDutyAccessToken accessToken,
+			DriverDutyEndRequest request,
+			AddressSnapshot dropLocation,
+			String photoName,
+			List<MultipartFile> receiptPhotos,
+			String ipAddress,
+			String userAgent
+	) throws IOException {
+
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
 
 		Booking booking = entry.getBooking();
 
@@ -375,9 +596,6 @@ public class ExternalDriverDutyService {
 			throw new BusinessException(ErrorCode.DUTY_NOT_RUNNING, "Drop details already submitted");
 		}
 
-		AddressSnapshot dropLocation = normalizeDriverLocation(request.location());
-
-		String photoName = saveImage(odometerPhoto);
 		Instant actualDropSubmittedAt = Instant.now();
 
 		DriverDutyCheckpoint checkpoint = new DriverDutyCheckpoint();
@@ -432,92 +650,12 @@ public class ExternalDriverDutyService {
 				.stream()
 				.anyMatch(duty -> duty.getStatus() != DutyStatus.COMPLETED);
 
-		if (anyOpenDuty) {
-			booking.setStatus(BookingStatus.RUNNING);
-		}
-
 		bookingEntryRepository.save(entry);
-		Booking savedBooking = bookingRepository.save(BookingUtil.calculateTotalAmount(booking));
+		bookingService.finalizeBookingAfterDutyCompletion(
+				booking.getBookingId(), entry.getDutyId(), anyOpenDuty, accessToken.getOrgId());
 
-		if (!anyOpenDuty) {
-			bookingService.completeBooking(savedBooking.getBookingId(), accessToken.getOrgId());
-
-			savedBooking = bookingRepository
-					.findByBookingIdAndOrgId(savedBooking.getBookingId(), accessToken.getOrgId())
-					.orElse(savedBooking);
-		}
-
-		accessToken.setLastUsedAt(actualDropSubmittedAt);
-		accessToken.setStatus(DriverDutyTokenStatus.COMPLETED);
-		tokenRepository.save(accessToken);
-
-		BigDecimal amountToCollect = calculatePendingAmount(savedBooking);
-
-		PaymentInstruction instruction;
-
-		if (amountToCollect.compareTo(BigDecimal.ZERO) > 0) {
-			try {
-				RazorpayQrPayload qrPayload = razorpayPaymentService.generateQR(
-						accessToken.getOrgId(),
-						savedBooking.getBookingId(),
-						entry.getDutyId(),
-						amountToCollect
-				);
-
-				String qrDisplayValue = firstNonBlank(
-						qrPayload.getQrImageContent(),
-						qrPayload.getQrImageUrl()
-				);
-
-				instruction = new PaymentInstruction(
-						true,
-						amountToCollect,
-						qrDisplayValue,
-						"RAZORPAY_UPI_QR_IMAGE",
-						"Collect payment from client"
-				);
-
-			} catch (Exception ex) {
-				ex.printStackTrace();
-
-				instruction = new PaymentInstruction(
-						true,
-						amountToCollect,
-						null,
-						"QR_GENERATION_FAILED",
-						"Payment is pending, but QR could not be generated"
-				);
-			}
-		} else {
-			instruction = new PaymentInstruction(
-					false,
-					amountToCollect,
-					null,
-					"NO_PAYMENT_REQUIRED",
-					"No payment collection required"
-			);
-		}
-
-		DutyCompletionSummary summary = new DutyCompletionSummary(
-				savedBooking.getBookingId(),
-				entry.getDutyId(),
-				entry.getStartingKM(),
-				entry.getClosingKM(),
-				entry.getClosingKM() - entry.getStartingKM(),
-				entry.getStartAt(),
-				entry.getEndAt(),
-				extraTotal,
-				savedBooking.getTotal().getAmount(),
-				amountToCollect
-		);
-
-		return new DriverDutyEndResponse(
-				true,
-				entry.getStatus().name(),
-				summary,
-				instruction,
-				"Duty completed successfully"
-		);
+		return new DutyCompletionResult(
+				entry, booking.getBookingId(), garageReturn, extraTotal, actualDropSubmittedAt);
 	}
 
 	/*
@@ -529,15 +667,23 @@ public class ExternalDriverDutyService {
 	@Transactional
 	public QrPaymentStatusResponse checkQrPaymentStatus(String rawToken) {
 
-		DriverDutyAccessToken accessToken = resolveTokenForPaymentStatus(rawToken);
+		DriverDutyAccessToken accessToken = tokenValidator.resolveTokenForPaymentStatus(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
 
 		try {
-			return razorpayPaymentService.isPaidByQR(
-					accessToken.getOrgId(),
-					entry.getBooking().getBookingId(),
-					entry.getDutyId()
-			);
+			boolean mockGateway = resolveEffectiveGateway(accessToken.getOrgId()) == PaymentGateway.MOCK;
+
+			return mockGateway
+					? mockPaymentService.mockQrStatus(
+							accessToken.getOrgId(),
+							entry.getBooking().getBookingId(),
+							entry.getDutyId()
+					)
+					: razorpayPaymentService.isPaidByQR(
+							accessToken.getOrgId(),
+							entry.getBooking().getBookingId(),
+							entry.getDutyId()
+					);
 		} catch (Exception ex) {
 			ex.printStackTrace();
 
@@ -552,64 +698,123 @@ public class ExternalDriverDutyService {
 
 	/*
 	 * =========================================================
+	 * LIVE LOCATION
+	 * =========================================================
+	 */
+
+	/*
+	 * resolveValidToken, not resolveTokenForPaymentStatus -- location has no
+	 * reason to keep working after duty completion the way payment polling
+	 * does. The token being ACTIVE alone doesn't guarantee the duty is still
+	 * running (there's a window where the token is ACTIVE but the entry is
+	 * ALLOTTED or already COMPLETED), so the entry's own status is checked
+	 * separately below -- that's what actually enforces "only while a duty
+	 * is genuinely running."
+	 */
+	@Transactional
+	public void submitLocationPing(String rawToken, DriverDutyLocationPingRequest payload) {
+
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = accessToken.getBookingEntry();
+
+		if (entry.getStatus() != DutyStatus.RUNNING) {
+			return;
+		}
+
+		Instant receivedAt = Instant.now();
+
+		Optional<DriverDutyLiveLocation> existing = liveLocationRepository.findByDutyId(entry.getDutyId());
+
+		// Captured before the new ping overwrites it below -- this is the real
+		// prior GPS fix, used by FraudSignalService's GPS-jump check.
+		AddressSnapshot previousLocation = existing
+				.map(loc -> new AddressSnapshot("previous-ping", null, loc.getLatitude(), loc.getLongitude()))
+				.orElse(null);
+		Instant previousCapturedAt = existing.map(DriverDutyLiveLocation::getCapturedAt).orElse(null);
+
+		DriverDutyLiveLocation location = existing
+				.orElseGet(() -> {
+					DriverDutyLiveLocation created = new DriverDutyLiveLocation();
+					created.setOrgId(accessToken.getOrgId());
+					created.setBookingId(entry.getBooking().getBookingId());
+					created.setDutyId(entry.getDutyId());
+					created.setDriverId(entry.getDriverId());
+					created.setBookingEntry(entry);
+					return created;
+				});
+
+		location.setLatitude(payload.latitude());
+		location.setLongitude(payload.longitude());
+		location.setAccuracyMeters(payload.accuracyMeters());
+		location.setHeadingDegrees(payload.headingDegrees());
+		location.setSpeedMps(payload.speedMps());
+		location.setCapturedAt(payload.capturedAt() != null ? payload.capturedAt() : receivedAt);
+		location.setReceivedAt(receivedAt);
+
+		liveLocationRepository.save(location);
+
+		if (payload.latitude() != null && payload.longitude() != null) {
+			fraudSignalService.checkGpsJump(
+					accessToken.getOrgId(), entry.getDriverId(), entry.getDutyId(),
+					previousLocation, previousCapturedAt,
+					payload.latitude(), payload.longitude(), location.getCapturedAt()
+			);
+		}
+
+		EtaEstimator.Estimate eta = EtaEstimator.estimate(
+				entry.getDropLocation(),
+				location.getLatitude(),
+				location.getLongitude(),
+				location.getSpeedMps()
+		);
+
+		dutyLocationChannelRegistry.broadcast(
+				entry.getDutyId(),
+				new DriverDutyLocationResponse(
+						entry.getDutyId(),
+						location.getLatitude(),
+						location.getLongitude(),
+						location.getHeadingDegrees(),
+						location.getCapturedAt(),
+						eta.distanceRemainingKm(),
+						eta.etaMinutes(),
+						true
+				)
+		);
+	}
+
+	/*
+	 * Same reasoning as ClientPaymentController.resolveEffectiveGateway: the org's
+	 * actual configured gateway decides, not a hardcoded assumption of RAZORPAY. An
+	 * org with no PaymentGatewayConfig row at all (today's default) falls back to
+	 * RAZORPAY, so this is a no-op for every org that existed before MOCK did.
+	 */
+	private PaymentGateway resolveEffectiveGateway(String orgId) {
+		return paymentGatewayConfigService.getRuntimeConfig(orgId)
+				.map(config -> config.gateway())
+				.orElse(PaymentGateway.RAZORPAY);
+	}
+
+	/*
+	 * =========================================================
 	 * HELPERS
 	 * =========================================================
 	 */
 
-	private DriverDutyAccessToken resolveValidToken(String rawToken) {
-		String tokenHash = hash(rawToken);
+	/*
+	 * Authorizes (org check) via the unlocked, booking-joined query first, then
+	 * takes the PESSIMISTIC_WRITE lock by id only -- never through a query that
+	 * joins booking, since MariaDB's FOR UPDATE has no "OF" clause to scope the
+	 * lock to just the entry table. See BookingEntryRepository.lockById.
+	 */
+	private BookingEntry lockEntryForDutyExecution(String dutyId, String orgId) {
+		BookingEntry authorized = bookingEntryRepository
+				.findByDutyIdAndOrgId(dutyId, orgId)
+				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
 
-		DriverDutyAccessToken token = tokenRepository.findByTokenHash(tokenHash)
-				.orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, "Invalid duty link"));
-
-		if (token.getStatus() == DriverDutyTokenStatus.REVOKED) {
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has been revoked");
-		}
-
-		if (token.getExpiresAt() != null && token.getExpiresAt().isBefore(Instant.now())) {
-			token.setStatus(DriverDutyTokenStatus.EXPIRED);
-			tokenRepository.save(token);
-
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has expired");
-		}
-
-		if (token.getStatus() == DriverDutyTokenStatus.EXPIRED) {
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has expired");
-		}
-
-		return token;
-	}
-
-	private DriverDutyAccessToken resolveTokenForPaymentStatus(String rawToken) {
-		String tokenHash = hash(rawToken);
-
-		DriverDutyAccessToken token = tokenRepository.findByTokenHash(tokenHash)
-				.orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, "Invalid duty link"));
-
-		if (token.getStatus() == DriverDutyTokenStatus.REVOKED) {
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has been revoked");
-		}
-
-		/*
-		 * Payment polling must remain available after duty completion.
-		 * Otherwise, frontend refresh cannot restore pending QR state.
-		 */
-		if (token.getStatus() == DriverDutyTokenStatus.COMPLETED) {
-			return token;
-		}
-
-		if (token.getExpiresAt() != null && token.getExpiresAt().isBefore(Instant.now())) {
-			token.setStatus(DriverDutyTokenStatus.EXPIRED);
-			tokenRepository.save(token);
-
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has expired");
-		}
-
-		if (token.getStatus() == DriverDutyTokenStatus.EXPIRED) {
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty link has expired");
-		}
-
-		return token;
+		return bookingEntryRepository
+				.lockById(authorized.getId())
+				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
 	}
 
 	private BigDecimal persistDriverExpensesAndBillingCharges(
@@ -677,6 +882,7 @@ public class ExternalDriverDutyService {
 		return type + " - " + input.description();
 	}
 
+	@SuppressWarnings("null")
 	private BigDecimal calculatePendingAmount(Booking booking) {
 		if (booking.getTotal() == null || booking.getTotal().getAmount() == null) {
 			return BigDecimal.ZERO;
@@ -762,6 +968,14 @@ public class ExternalDriverDutyService {
 		return location != null && location.isvalid();
 	}
 
+	private GeoPoint toGeoPoint(AddressSnapshot location) {
+		if (!locationPresent(location)) {
+			return null;
+		}
+
+		return new GeoPoint(location.getLatitude(), location.getLongitude());
+	}
+
 	private GarageReturnEstimate calculateGarageReturnEstimate(
 			BookingEntry entry,
 			AddressSnapshot dropLocation
@@ -779,9 +993,15 @@ public class ExternalDriverDutyService {
 					.setScale(0, RoundingMode.CEILING)
 					.intValue();
 
+			boolean routeAvailable = result.routeGeometry() != null && !result.routeGeometry().isEmpty();
+
 			return new GarageReturnEstimate(
 					distanceKmRoundedUp,
-					result.durationSeconds()
+					result.durationSeconds(),
+					result.distanceKm(),
+					result.provider(),
+					routeAvailable,
+					result.routeGeometry()
 			);
 		} catch (Exception ex) {
 			/*
@@ -795,6 +1015,7 @@ public class ExternalDriverDutyService {
 		}
 	}
 
+	@SuppressWarnings("null")
 	private AddressSnapshot resolveGarageLocation(BookingEntry entry) {
 		if (locationPresent(entry.getGarageLocation())) {
 			return entry.getGarageLocation();
@@ -836,21 +1057,16 @@ public class ExternalDriverDutyService {
 				.encodeToString(bytes);
 	}
 
-	private String hash(String rawToken) {
-		try {
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
-			return HexFormat.of().formatHex(digest.digest(rawToken.getBytes()));
-		} catch (Exception ex) {
-			throw new IllegalStateException("Unable to hash token", ex);
-		}
-	}
-
 	private record GarageReturnEstimate(
 			int distanceKmRoundedUp,
-			long durationSeconds
+			long durationSeconds,
+			double rawDistanceKm,
+			String provider,
+			boolean routeAvailable,
+			List<GeoPoint> routeGeometry
 	) {
 		static GarageReturnEstimate zero() {
-			return new GarageReturnEstimate(0, 0);
+			return new GarageReturnEstimate(0, 0, 0.0, null, false, null);
 		}
 	}
 }

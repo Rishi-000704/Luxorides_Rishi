@@ -20,4 +20,16 @@ public interface DriverDutyCheckpointRepository extends JpaRepository<DriverDuty
 		String bookingEntryId,
 		DriverDutyCheckpointType checkpointType
 	);
+
+	/*
+	 * Real proxy for "where is this idle driver right now" -- there is no
+	 * live-tracking concept for a driver who isn't on an active duty
+	 * (DriverDutyLiveLocation is keyed by dutyId and only populated while
+	 * RUNNING). The driver's most recent END checkpoint is their last known,
+	 * real, GPS-captured position -- used by DispatchSuggestionService.
+	 */
+	Optional<DriverDutyCheckpoint> findFirstByDriverIdAndCheckpointTypeOrderBySubmittedAtDesc(
+		String driverId,
+		DriverDutyCheckpointType checkpointType
+	);
 }

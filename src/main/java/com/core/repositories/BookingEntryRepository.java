@@ -1,5 +1,6 @@
 package com.core.repositories;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,18 +41,6 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 	);
 
 	/* -------------------------------------------------
-	   Pessimistic lock (optional but recommended)
-	   ------------------------------------------------- */
-
-	@Lock(LockModeType.PESSIMISTIC_WRITE)
-	@Query("""
-		SELECT e
-		FROM BookingEntry e
-		WHERE e.id = :entryId
-	""")
-	Optional<BookingEntry> lockById(@Param("entryId") String entryId);
-
-	/* -------------------------------------------------
 	   Booking-scoped queries
 	   ------------------------------------------------- */
 
@@ -90,12 +79,14 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 			WHERE b.orgId = :orgId
 			  AND e.driverId = :driverId
 			  AND e.status IN :statuses
+			  AND b.status IN :bookingStatuses
 			ORDER BY e.reportingTime ASC
 		""")
 	Page<BookingEntry> findActiveDutiesForDriver(
 		@Param("orgId") String orgId,
 		@Param("driverId") String driverId,
 		@Param("statuses") List<DutyStatus> statuses,
+		@Param("bookingStatuses") List<BookingStatus> bookingStatuses,
 		Pageable pageable
 	);
 
@@ -166,7 +157,24 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 			@Param("dutyId") String dutyId,
 			@Param("orgId") String orgId
 		);
-		
+
+		/*
+		 * PESSIMISTIC_WRITE on the primary key only, deliberately WITHOUT a
+		 * JOIN FETCH to booking -- unlike lockByDutyIdAndOrgId above, whose
+		 * JOIN FETCH e.booking makes MariaDB's FOR UPDATE (no "OF" clause
+		 * support) lock the joined booking row too, for the entire duration
+		 * of the caller's transaction. That held lock is what caused the
+		 * driver duty-end payment QR lock-wait-timeout: any later
+		 * REQUIRES_NEW step touching that same booking row hangs until the
+		 * outer transaction commits, which can't happen until the
+		 * REQUIRES_NEW call returns. Callers should authorize (org check)
+		 * via the unlocked findByDutyIdAndOrgId query first, then take this
+		 * lock by id -- see ExternalDriverDutyService.submitStart/submitEnd.
+		 */
+		@Lock(LockModeType.PESSIMISTIC_WRITE)
+		@Query("SELECT e FROM BookingEntry e WHERE e.id = :id")
+		Optional<BookingEntry> lockById(@Param("id") String id);
+
 		@Query("""
 				SELECT e
 				FROM BookingEntry e
@@ -343,5 +351,102 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 	Optional<BookingEntry> lockByIdAndOrgId(
 			@Param("entryId") String entryId,
 			@Param("orgId") String orgId
+	);
+
+	/* -------------------------------------------------
+	   P4 analytics aggregates -- real GROUP BY queries over
+	   completed duties, no fabricated/estimated data.
+	   ------------------------------------------------- */
+
+	@Query("""
+		SELECT e.fleetVehicleId, COUNT(e), SUM(e.closingKM - e.startingKM)
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.status = com.core.models.enums.DutyStatus.COMPLETED
+		  AND e.fleetVehicleId IS NOT NULL
+		  AND e.closingKM IS NOT NULL
+		  AND e.startingKM IS NOT NULL
+		  AND (:from IS NULL OR e.startAt >= :from)
+		  AND (:to IS NULL OR e.startAt <= :to)
+		GROUP BY e.fleetVehicleId
+	""")
+	List<Object[]> aggregateVehicleUtilization(
+			@Param("orgId") String orgId,
+			@Param("from") Instant from,
+			@Param("to") Instant to
+	);
+
+	@Query("""
+		SELECT e.driverId, COUNT(e)
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.status = com.core.models.enums.DutyStatus.COMPLETED
+		  AND e.driverId IS NOT NULL
+		  AND (:from IS NULL OR e.startAt >= :from)
+		  AND (:to IS NULL OR e.startAt <= :to)
+		GROUP BY e.driverId
+	""")
+	List<Object[]> aggregateDriverCompletedDuties(
+			@Param("orgId") String orgId,
+			@Param("from") Instant from,
+			@Param("to") Instant to
+	);
+
+	@Query("""
+		SELECT e
+		FROM BookingEntry e
+		JOIN FETCH e.booking b
+		WHERE b.orgId = :orgId
+		  AND e.status = com.core.models.enums.DutyStatus.REQUESTED
+		ORDER BY e.reportingTime ASC
+	""")
+	List<BookingEntry> findRequestedDutiesForDispatch(@Param("orgId") String orgId);
+
+	Optional<BookingEntry> findFirstByFleetVehicleIdAndStatusOrderByEndAtDesc(
+			String fleetVehicleId, DutyStatus status);
+
+	@Query("SELECT COUNT(e) FROM BookingEntry e WHERE e.booking.orgId = :orgId AND e.status IN :statuses")
+	long countByOrgIdAndStatusIn(@Param("orgId") String orgId, @Param("statuses") List<DutyStatus> statuses);
+
+	@Query("""
+		SELECT COUNT(DISTINCT e.driverId)
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.status IN :statuses
+		  AND e.driverId IS NOT NULL
+	""")
+	long countDistinctBusyDrivers(@Param("orgId") String orgId, @Param("statuses") List<DutyStatus> statuses);
+
+	@Query("""
+		SELECT MAX(e.closingKM)
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.fleetVehicleId = :fleetVehicleId
+		  AND e.closingKM IS NOT NULL
+	""")
+	Integer findMaxClosingKmForVehicle(@Param("orgId") String orgId, @Param("fleetVehicleId") String fleetVehicleId);
+
+	/*
+	 * Real historical completed-trip data for FareRecommendationService --
+	 * distance-proximity filtering happens in Java (see that service) since
+	 * it needs closingKM-startingKM, which JPQL can compute but bucketing
+	 * "within +/-25% of a target" is clearer expressed in Java over a
+	 * moderately-sized real result set than as a parameterized JPQL range.
+	 */
+	@Query("""
+		SELECT e
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.status = com.core.models.enums.DutyStatus.COMPLETED
+		  AND e.masterVehicleId = :masterVehicleId
+		  AND e.pack.dutyType = :dutyType
+		  AND e.startingKM IS NOT NULL
+		  AND e.closingKM IS NOT NULL
+		  AND e.dutyTotal IS NOT NULL
+	""")
+	List<BookingEntry> findCompletedForFareRecommendation(
+			@Param("orgId") String orgId,
+			@Param("masterVehicleId") String masterVehicleId,
+			@Param("dutyType") com.core.models.enums.DutyType dutyType
 	);
 }

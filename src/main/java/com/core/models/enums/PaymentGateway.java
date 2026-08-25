@@ -5,5 +5,8 @@ public enum PaymentGateway {
     CASHFREE,
     STRIPE,
     PAYU,
-    MANUAL_ENTRY
+    MANUAL_ENTRY,
+
+    /** Dev/local-only: simulates a payment with no real money movement. See MockPaymentService. */
+    MOCK
 }

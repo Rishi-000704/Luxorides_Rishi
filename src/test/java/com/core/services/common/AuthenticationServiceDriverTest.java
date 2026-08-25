@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,6 +18,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -34,7 +37,6 @@ import com.core.repositories.EmployeeRepository;
 import com.core.repositories.UserOtpRepository;
 import com.core.repositories.UserRepository;
 import com.core.services.JwtService;
-import com.core.services.common.FileService;
 
 /*
  * Covers the driver OTP login flow added to AuthenticationService: unlike the
@@ -49,6 +51,7 @@ class AuthenticationServiceDriverTest {
 	private JwtService jwtService;
 	private UserOtpRepository userOtpRepository;
 	private SMSService smsService;
+	private OtpRecordWriter otpRecordWriter;
 	private AuthenticationService service;
 
 	private static final String ORG_ID = "org-1";
@@ -66,9 +69,11 @@ class AuthenticationServiceDriverTest {
 		userOtpRepository = mock(UserOtpRepository.class);
 		smsService = mock(SMSService.class);
 		FileService fileService = mock(FileService.class);
+		otpRecordWriter = mock(OtpRecordWriter.class);
 
 		service = new AuthenticationService(userRepository, clientRepository, employeeRepository, driverRepository,
-				passwordEncoder, jwtService, authenticationManager, userOtpRepository, smsService, fileService);
+				passwordEncoder, jwtService, authenticationManager, userOtpRepository, smsService, fileService,
+				otpRecordWriter);
 	}
 
 	@Test
@@ -100,9 +105,10 @@ class AuthenticationServiceDriverTest {
 	/*
 	 * Regression test for a real race: issueOtp used to findByPhone() then delete(entity),
 	 * which throws StaleObjectStateException if a concurrent request for the same phone
-	 * (e.g. a double-tapped "Send OTP") already deleted that row. A bulk deleteByPhone()
-	 * has no such expectation, so it must be the one used here -- never findByPhone/delete
-	 * for the issuance path.
+	 * (e.g. a double-tapped "Send OTP") already deleted that row. The write now goes
+	 * through OtpRecordWriter.replace() (a bulk deleteByPhone() + save() in its own
+	 * REQUIRES_NEW transaction) -- AuthenticationService itself must never touch
+	 * userOtpRepository's delete/find directly for the issuance path.
 	 */
 	@Test
 	void generateDriverOtp_clearsAnyPriorOtpAtomically_notFindThenDelete() {
@@ -115,9 +121,57 @@ class AuthenticationServiceDriverTest {
 
 		service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID));
 
-		verify(userOtpRepository, times(1)).deleteByPhone(PHONE);
+		verify(otpRecordWriter, times(1)).replace(argThat(record -> PHONE.equals(record.getPhone())));
+		verify(userOtpRepository, never()).deleteByPhone(anyString());
 		verify(userOtpRepository, never()).findByPhone(PHONE);
 		verify(userOtpRepository, never()).delete(any());
+	}
+
+	/*
+	 * Regression test for a real deadlock: two requests racing to issue an OTP for the
+	 * same phone (e.g. a double-tapped "Send OTP") can deadlock InnoDB on the
+	 * delete-then-insert in OtpRecordWriter.replace(). Each retry must go through a
+	 * fresh call (and therefore a fresh REQUIRES_NEW transaction) rather than reusing
+	 * the transaction MySQL already aborted -- this only proves the retry happens; the
+	 * fresh-transaction guarantee itself is covered by the live concurrent test against
+	 * a real MySQL instance, not by this mock-based test.
+	 */
+	@Test
+	void generateDriverOtp_retriesOnce_whenOtpWriteHitsADeadlock_thenSucceeds() {
+		Driver driver = new Driver();
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+		when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+		when(smsService.sendOtp(eq(ORG_ID), eq(PHONE), anyString(), anyString())).thenReturn(true);
+
+		doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+				.doNothing()
+				.when(otpRecordWriter).replace(any());
+
+		var response = service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID));
+
+		assertEquals(true, response.success());
+		verify(otpRecordWriter, times(2)).replace(any());
+		verify(smsService, times(1)).sendOtp(eq(ORG_ID), eq(PHONE), anyString(), anyString());
+	}
+
+	@Test
+	void generateDriverOtp_givesUpAndFails_afterRepeatedDeadlocks() {
+		Driver driver = new Driver();
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+		when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+
+		doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+				.when(otpRecordWriter).replace(any());
+
+		assertThrows(CannotAcquireLockException.class,
+				() -> service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID)));
+
+		verify(otpRecordWriter, times(3)).replace(any());
+		verify(smsService, never()).sendOtp(anyString(), anyString(), anyString(), anyString());
 	}
 
 	@Test

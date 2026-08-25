@@ -55,7 +55,9 @@ public class FallbackGeoProvider implements GeoProvider {
 		return new DistanceTimeResult(
 				distanceKm,
 				durationSeconds,
-				true
+				true,
+				getName(),
+				null // straight-line estimate only, no real road geometry
 		);
 	}
 

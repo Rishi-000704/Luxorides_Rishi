@@ -19,6 +19,7 @@ public class SMSService {
 	private final SmsProviderConfigService smsProviderConfigService;
 	private final Msg91SmsService msg91SmsService;
 
+	@SuppressWarnings("null")
 	public boolean sendOtp(String orgId, String mobile, String otp, String expiryMinutes) {
 		return send(
 				orgId,
@@ -28,6 +29,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendBookingConfirmation(
 			String orgId,
 			String mobileNumber,
@@ -42,6 +44,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendDutyAllotmentSms(
 			String orgId,
 			String mobileNumber,
@@ -65,6 +68,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendDutyClosureSms(String orgId, String mobileNumber, String dutyId) {
 		return send(
 				orgId,
@@ -74,6 +78,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendPaymentConfirmationSms(
 			String orgId,
 			String mobileNumber,
@@ -88,6 +93,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendPaymentPendingSms(
 			String orgId,
 			String mobileNumber,
@@ -102,6 +108,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendBookingCancellationSms(String orgId, String mobileNumber, String bookingId) {
 		return send(
 				orgId,
@@ -111,6 +118,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendRefundInitiatedSms(
 			String orgId,
 			String mobileNumber,
@@ -125,6 +133,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendRefundCompletedSms(
 			String orgId,
 			String mobileNumber,
@@ -139,6 +148,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendReDutyAllotmentSms(
 			String orgId,
 			String mobileNumber,
@@ -162,6 +172,7 @@ public class SMSService {
 		);
 	}
 
+	@SuppressWarnings("null")
 	public boolean sendReDutyClosureSms(String orgId, String mobileNumber, String bookingId) {
 		return send(
 				orgId,

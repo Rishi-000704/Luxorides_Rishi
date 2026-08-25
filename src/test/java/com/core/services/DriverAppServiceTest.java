@@ -23,6 +23,7 @@ import com.core.exception.NotFoundException;
 import com.core.models.Booking;
 import com.core.models.BookingEntry;
 import com.core.models.Driver;
+import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.DriverRepository;
@@ -61,11 +62,13 @@ class DriverAppServiceTest {
 	}
 
 	@Test
+	@SuppressWarnings("null")
 	void getActiveDuties_scopesToCallingDriverOnly() {
 		Pageable pageable = PageRequest.of(0, 10);
 		BookingEntry entry = duty(DutyStatus.ALLOTTED);
 		when(bookingEntryRepository.findActiveDutiesForDriver(
-				eq(ORG_ID), eq(DRIVER_ID), eq(List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING)), eq(pageable)))
+				eq(ORG_ID), eq(DRIVER_ID), eq(List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING)),
+				eq(List.of(BookingStatus.CONFIRMED, BookingStatus.RUNNING)), eq(pageable)))
 				.thenReturn(new PageImpl<>(List.of(entry)));
 
 		var result = service.getActiveDuties(ORG_ID, USER_ID, pageable);
@@ -107,9 +110,23 @@ class DriverAppServiceTest {
 		assertEquals(expiry, response.expiresAt());
 	}
 
+	@Test
+	void issueExecutionToken_rejectsDutyWhoseBookingHasAlreadyClosed() {
+		// Reproduces the real bug: a duty added to an already-invoiced, COMPLETED booking
+		// (see BookingService#reopenCompletedBookingAfterDutyAdded) stays ALLOTTED at the
+		// duty level even though the booking itself can no longer be executed against.
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		entry.getBooking().setStatus(BookingStatus.COMPLETED);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+
+		assertThrows(BusinessException.class,
+				() -> service.issueExecutionToken(ORG_ID, USER_ID, DUTY_ID));
+	}
+
 	private BookingEntry duty(DutyStatus status) {
 		Booking booking = new Booking();
 		booking.setBookingId(BOOKING_ID);
+		booking.setStatus(BookingStatus.CONFIRMED);
 
 		BookingEntry entry = new BookingEntry();
 		entry.setDutyId(DUTY_ID);

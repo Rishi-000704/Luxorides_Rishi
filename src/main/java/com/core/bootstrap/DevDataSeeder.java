@@ -29,6 +29,7 @@ import com.core.models.embedded.Money;
 import com.core.models.embedded.Name;
 import com.core.models.Package;
 import com.core.models.Passenger;
+import com.core.models.PaymentGatewayConfig;
 import com.core.models.SmsProviderConfig;
 import com.core.models.enums.AccountType;
 import com.core.models.enums.Authority;
@@ -38,6 +39,7 @@ import com.core.models.enums.GstType;
 import com.core.models.enums.OrgStatus;
 import com.core.models.enums.OwnershipType;
 import com.core.models.enums.PackageScope;
+import com.core.models.enums.PaymentGateway;
 import com.core.models.enums.SmsProviderType;
 import com.core.models.enums.VehicleStatus;
 import com.core.repositories.*;
@@ -62,8 +64,10 @@ public class DevDataSeeder implements CommandLineRunner {
 	private final DriverRepository driverRepository;
 	private final CityGarageRepository garageRepository;
 	private final SmsProviderConfigRepository smsProviderConfigRepository;
+	private final PaymentGatewayConfigRepository paymentGatewayConfigRepository;
 	private final BookingEntryRepository bookingEntryRepository;
 	private final BookingService bookingService;
+	private final RateCardSeeder rateCardSeeder;
 	private final Test test;
 
 	@Override
@@ -80,6 +84,21 @@ public class DevDataSeeder implements CommandLineRunner {
 		// login is unusable locally without real SMS gateway credentials.
 		seedConsoleSmsProviderIfMissing("demo");
 		seedConsoleSmsProviderIfMissing("luxorides");
+
+		// Same reasoning as the SMS provider above: without this, any payment step
+		// (customer-app checkout, driver-app duty-end QR) 400s with "Razorpay payment
+		// gateway is not configured" because no real Razorpay account exists locally.
+		seedMockPaymentGatewayIfMissing("demo");
+		seedMockPaymentGatewayIfMissing("luxorides");
+
+		// Real chauffeur-drive rate card (transcribed from the client's rate-card PDFs),
+		// replacing/supplementing the handful of ₹4,500-flat-fee dummy vehicles below --
+		// see RateCardSeeder for source and confidence notes per roster.
+		try {
+			rateCardSeeder.seedIfMissing("demo");
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
 
 		try {
 			seedSampleDutyIfMissing("demo");
@@ -134,6 +153,25 @@ public class DevDataSeeder implements CommandLineRunner {
 	}
 
 	/**
+	 * Dev-only: without this, every payment step (customer-app checkout order,
+	 * driver-app duty-end QR) fails because no real Razorpay account exists locally.
+	 * MOCK auto-confirms with no real money movement -- see MockPaymentService.
+	 */
+	private void seedMockPaymentGatewayIfMissing(String orgId) {
+		if (paymentGatewayConfigRepository.findByOrgIdAndGateway(orgId, PaymentGateway.MOCK).isPresent()) {
+			return;
+		}
+
+		PaymentGatewayConfig config = new PaymentGatewayConfig();
+		config.setOrgId(orgId);
+		config.setGateway(PaymentGateway.MOCK);
+		config.setActive(true);
+		config.setDefaultConfig(true);
+		config.setDisplayName("Local dev dummy payments (no real money moved)");
+		paymentGatewayConfigRepository.save(config);
+	}
+
+	/**
 	 * Dev-only: creates one real, fully-allotted duty for the seeded ORG driver
 	 * (+918840844028 / Mahesh Singh) using the actual booking pipeline
 	 * (BookingService.addBooking -> addBookingEntry -> confirmBooking -> allotDuty)
@@ -182,7 +220,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						.findFirst()
 						.orElse(null);
 
-		if (pack == null) {
+		if (masterVehicle == null || pack == null) {
 			return;
 		}
 
@@ -228,6 +266,7 @@ public class DevDataSeeder implements CommandLineRunner {
 		bookingService.allotDuty(allotCommand, orgId);
 	}
 
+	@SuppressWarnings("null")
 	private void seedGarage() {
 		AddressSnapshot delhiGarage = new AddressSnapshot(
 				"Farm 47, Umbrella Estate Rd, D Block, Kapas Hera Estate, New Delhi, Delhi 110037, India",
@@ -235,9 +274,21 @@ public class DevDataSeeder implements CommandLineRunner {
 		AddressSnapshot mumbaiGarage = new AddressSnapshot(
 				"MCGM Park, Tunga Village, Chandivali, Andheri East, Mumbai, Maharashtra 400072, India",
 				"ChIJXS-EfQDJ5zsRP38tiQGx2fY", 19.11809402407151, 72.89229160876648);
+		AddressSnapshot bengaluruGarage = new AddressSnapshot(
+				"MG Road, Bengaluru, Karnataka 560001, India", null, 12.9757, 77.6079);
+		AddressSnapshot chennaiGarage = new AddressSnapshot(
+				"T Nagar, Chennai, Tamil Nadu 600017, India", null, 13.0418, 80.2341);
+		AddressSnapshot hyderabadGarage = new AddressSnapshot(
+				"Banjara Hills, Hyderabad, Telangana 500034, India", null, 17.4156, 78.4347);
+		AddressSnapshot gurugramGarage = new AddressSnapshot(
+				"Cyber City, Gurugram, Haryana 122002, India", null, 28.4949, 77.0868);
 
 		garageRepository.saveAll(List.of(new CityGarage(null, "demo", "Delhi", delhiGarage),
-				new CityGarage(null, "demo", "Mumbai", mumbaiGarage)));
+				new CityGarage(null, "demo", "Mumbai", mumbaiGarage),
+				new CityGarage(null, "demo", "Bengaluru", bengaluruGarage),
+				new CityGarage(null, "demo", "Chennai", chennaiGarage),
+				new CityGarage(null, "demo", "Hyderabad", hyderabadGarage),
+				new CityGarage(null, "demo", "Gurugram", gurugramGarage)));
 	}
 
 	private Org seedOrg() {
@@ -366,6 +417,7 @@ public class DevDataSeeder implements CommandLineRunner {
 		employeeRepository.save(emp);
 	}
 
+	@SuppressWarnings("null")
 	private List<ClientBillingEntity> seedClientBillingEntities(Org org) {
 
 		return clientBillingEntityRepository.saveAll(List.of(
@@ -382,6 +434,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						"+918840844022", null, "Individual")));
 	}
 
+	@SuppressWarnings("null")
 	private List<Client> seedClients(Org org, List<ClientBillingEntity> entities) {
 		return clientRepository.saveAll(List.of(
 				new Client(null, org.getOrgId(), null, new Name("Mr.", "Rahul", "Sharma"), "rahul@mail.com",
@@ -397,6 +450,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						List.of(entities.get(2).getId(), entities.get(1).getId()), null, null)));
 	}
 
+	@SuppressWarnings("null")
 	private void seedPassengers(Org org, List<Client> clients) {
 
 		passengerRepository
@@ -412,6 +466,7 @@ public class DevDataSeeder implements CommandLineRunner {
 								.toList());
 	}
 
+	@SuppressWarnings("null")
 	private void seedDrivers(Org org, List<Client> clients) {
 
 		driverRepository.saveAll(List.of(
@@ -439,6 +494,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						"DL-1420110024680", null, OwnershipType.CLIENT, null)));
 	}
 
+	@SuppressWarnings("null")
 	private List<MasterVehicle> seedMasterVehicles(Org org) {
 		return masterVehicleRepository.saveAll(List.of(
 				new MasterVehicle(null, org.getOrgId(), "Audi A3", "audi-a3-cabriolet.webp", null, null, null,
@@ -498,6 +554,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						"porsche-cayenne", 4, 70, true, VehicleStatus.PUBLISHED, "Group Travel")));
 	}
 
+	@SuppressWarnings("null")
 	private void seedFleetVehicles(Org org, List<Client> clients, List<MasterVehicle> masters) {
 
 		fleetVehicleRepository.saveAll(List.of(
@@ -511,6 +568,7 @@ public class DevDataSeeder implements CommandLineRunner {
 						new AddressSnapshot(), OwnershipType.ORG, null, null)));
 	}
 
+	@SuppressWarnings("null")
 	private void seedPackages(Org org, List<Client> clients, List<MasterVehicle> masters) {
 
 		packageRepository.saveAll(List.of(

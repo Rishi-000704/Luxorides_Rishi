@@ -3,6 +3,8 @@ package com.core.services.config;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.core.dtos.config.CancellationPolicyUpdateRequest;
+import com.core.dtos.config.DynamicPricingConfigRequest;
 import com.core.dtos.config.OrganizationUpdateRequest;
 import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
@@ -35,6 +37,22 @@ public class OrgService {
 		org.setPan(request.pan());
 		org.setPhone(request.phone());
 		org.setWebsiteLink(request.websiteLink());
+		return this.orgRepo.save(org);
+	}
+
+	@Transactional
+	public Org updateCancellationPolicy(String orgId, CancellationPolicyUpdateRequest request) {
+		Org org = this.getOrg(orgId);
+		org.setCancellationFreeWindowHours(request.cancellationFreeWindowHours());
+		org.setCancellationFeePercent(request.cancellationFeePercent());
+		return this.orgRepo.save(org);
+	}
+
+	@Transactional
+	public Org updateDynamicPricingConfig(String orgId, DynamicPricingConfigRequest request) {
+		Org org = this.getOrg(orgId);
+		org.setDynamicPricingEnabled(request.enabled());
+		org.setDynamicPricingMaxMultiplier(request.maxMultiplier());
 		return this.orgRepo.save(org);
 	}
 

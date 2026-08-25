@@ -8,5 +8,6 @@ public record RefundInitiatedEvent(
 
         String bookingId,
 
-        String refundAmount
+        String refundAmount,
+        String feeAmount
         ) {}

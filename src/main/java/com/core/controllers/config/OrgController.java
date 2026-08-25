@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.core.dtos.config.CancellationPolicyUpdateRequest;
+import com.core.dtos.config.DynamicPricingConfigRequest;
 import com.core.dtos.config.OrganizationUpdateRequest;
 import com.core.models.Org;
 import com.core.security.SecurityContextUtil;
@@ -32,6 +34,18 @@ public class OrgController {
 	@PreAuthorize("hasAuthority('ORG_EDIT')")
 	public Org updateOrg(@RequestBody OrganizationUpdateRequest request) {
 		return this.orgService.updateOrg(security.orgId(), request);
+	}
+
+	@PutMapping("/cancellation-policy")
+	@PreAuthorize("hasAuthority('ORG_EDIT')")
+	public Org updateCancellationPolicy(@RequestBody CancellationPolicyUpdateRequest request) {
+		return this.orgService.updateCancellationPolicy(security.orgId(), request);
+	}
+
+	@PutMapping("/dynamic-pricing")
+	@PreAuthorize("hasAuthority('DYNAMIC_PRICING_CONFIG_EDIT')")
+	public Org updateDynamicPricingConfig(@RequestBody DynamicPricingConfigRequest request) {
+		return this.orgService.updateDynamicPricingConfig(security.orgId(), request);
 	}
 
 }

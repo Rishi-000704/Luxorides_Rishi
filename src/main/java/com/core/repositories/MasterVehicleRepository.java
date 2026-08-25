@@ -17,6 +17,8 @@ public interface MasterVehicleRepository extends JpaRepository<MasterVehicle, St
 
 	Optional<MasterVehicle> findByIdAndOrgId(String id, String orgId);
 
+	Optional<MasterVehicle> findByOrgIdAndSlug(String orgId, String slug);
+
 	List<MasterVehicle> findByOrgId(String orgId);
 
 	Page<MasterVehicle> findByOrgId(String orgId, Pageable pageable);

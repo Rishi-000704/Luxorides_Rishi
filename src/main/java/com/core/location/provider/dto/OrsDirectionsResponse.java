@@ -8,7 +8,8 @@ public record OrsDirectionsResponse(
 ) {
 
 	public record Feature(
-			Properties properties
+			Properties properties,
+			Geometry geometry
 	) {
 	}
 
@@ -20,6 +21,18 @@ public record OrsDirectionsResponse(
 	public record Summary(
 			Double distance,
 			Double duration
+	) {
+	}
+
+	/**
+	 * GeoJSON LineString geometry as returned by ORS Directions V2 (GET, default
+	 * response format). {@code coordinates} is a list of [lon, lat] pairs, in that
+	 * order per the GeoJSON spec -- callers must flip to lat/lng when converting
+	 * to {@link com.core.location.api.GeoPoint}.
+	 */
+	public record Geometry(
+			String type,
+			List<List<Double>> coordinates
 	) {
 	}
 

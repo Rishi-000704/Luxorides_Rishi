@@ -56,4 +56,28 @@ public class Org {
 	private String websiteLink;
 	@Column(length = 500)
 	private String remarks;
+
+	/*
+	 * Per-org cancellation policy (configurable rather than hardcoded, per
+	 * product decision). Nulls are treated as "no free window / no fee" by
+	 * CancellationPolicyService -- an org that never configures this behaves
+	 * exactly as if cancellation were always free, matching today's
+	 * (unconfigured) behavior.
+	 */
+	private Integer cancellationFreeWindowHours;
+
+	@Column(precision = 5, scale = 2)
+	private java.math.BigDecimal cancellationFeePercent;
+
+	/*
+	 * Dynamic-pricing config. Disabled by default (null/false) -- an org that
+	 * never configures this sees the multiplier endpoint return 1.0 (no-op),
+	 * matching pre-feature behavior. maxMultiplier bounds how aggressive the
+	 * real-time demand/supply-based multiplier (DynamicPricingService) is
+	 * ever allowed to go, e.g. 1.50 = capped at 50% above base rate.
+	 */
+	private boolean dynamicPricingEnabled = false;
+
+	@Column(precision = 4, scale = 2)
+	private java.math.BigDecimal dynamicPricingMaxMultiplier;
 }

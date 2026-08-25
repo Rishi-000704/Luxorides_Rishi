@@ -316,7 +316,9 @@ public class GoogleGeoProvider implements GeoProvider {
 		return new DistanceTimeResult(
 				element.distance().value() / 1000.0,
 				element.duration().value(),
-				false
+				false,
+				getName(),
+				null // Distance Matrix API never returns route geometry
 		);
 	}
 
@@ -696,6 +698,7 @@ public class GoogleGeoProvider implements GeoProvider {
 		);
 	}
 
+	@SuppressWarnings("null")
 	private String extractState(
 			GoogleGeocodingResponse response
 	) {
@@ -748,6 +751,7 @@ public class GoogleGeoProvider implements GeoProvider {
 				);
 	}
 
+	@SuppressWarnings("null")
 	private String extractState(
 			List<GooglePlaceDetailsResponse.AddressComponent> addressComponents
 	) {

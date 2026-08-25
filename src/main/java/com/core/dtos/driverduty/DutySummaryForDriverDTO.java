@@ -18,6 +18,7 @@ public record DutySummaryForDriverDTO(
 		DutyStatus status,
 
 		String clientName,
+		String clientPhone,
 		String vehicleName,
 		String vehicleNumber,
 

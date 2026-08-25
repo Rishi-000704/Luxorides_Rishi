@@ -14,13 +14,15 @@ import com.core.models.MasterVehicle;
 import com.core.models.Payment;
 import com.core.models.embedded.Money;
 import com.core.models.enums.PaymentStatus;
+import com.core.repositories.TripRatingRepository;
+
+import lombok.RequiredArgsConstructor;
 
 @Component
+@RequiredArgsConstructor
 public final class ClientBookingAssembler {
 
-	private ClientBookingAssembler() {
-		// utility class
-	}
+	private final TripRatingRepository tripRatingRepository;
 
 	/* ===================== ROOT ===================== */
 
@@ -63,6 +65,16 @@ public final class ClientBookingAssembler {
 
 		String category = fv != null ? fv.getMasterVehicle().getCategory() : mv != null ? mv.getCategory() : null;
 
+		String driverId = e.getDriver() != null ? e.getDriver().getId() : null;
+
+		Double ratingAverage = driverId != null
+				? tripRatingRepository.findAverageStarsByDriverIdAndOrgId(driverId, booking.getOrgId())
+				: null;
+
+		Long ratingCount = driverId != null
+				? tripRatingRepository.countByDriverIdAndOrgId(driverId, booking.getOrgId())
+				: 0L;
+
 		return new ClientBookingDTO.Entry(e.getDutyId(), e.getStatus(), e.getPack(),
 				mapPassengers(e.getPassengerIds(), booking),
 
@@ -74,6 +86,7 @@ public final class ClientBookingAssembler {
 				e.getDriver() != null ? e.getDriver().getPic() : null,
 				e.getDriver() != null ? e.getDriver().getGender() : null,
 				e.getDriver() != null ? e.getDriver().getPhone() : null,
+				ratingAverage, ratingCount,
 
 				// Reporting
 				e.getReportingLocation() != null ? e.getReportingLocation().getFormattedAddress() : null,

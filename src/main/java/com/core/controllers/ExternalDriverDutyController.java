@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.util.List;
 
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -16,10 +18,17 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
+import com.core.dtos.driverduty.DriverDutyIncidentRequest;
+import com.core.dtos.driverduty.DriverDutyIncidentResponse;
+import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
+import com.core.dtos.driverduty.DriverDutySosRequest;
+import com.core.dtos.driverduty.DriverDutySosResponse;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
 import com.core.gateway.razerpay.QrPaymentStatusResponse;
+import com.core.services.DriverDutyIncidentService;
+import com.core.services.DriverDutySosService;
 import com.core.services.ExternalDriverDutyService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,6 +41,8 @@ import lombok.RequiredArgsConstructor;
 public class ExternalDriverDutyController {
 
 	private final ExternalDriverDutyService externalDriverDutyService;
+	private final DriverDutySosService driverDutySosService;
+	private final DriverDutyIncidentService driverDutyIncidentService;
 
 	@GetMapping("/{token}")
 	public DriverDutySummaryResponse getDutySummary(@PathVariable String token) {
@@ -83,6 +94,39 @@ public class ExternalDriverDutyController {
 				getClientIp(request),
 				userAgent
 		);
+	}
+
+	@PostMapping("/{token}/location")
+	public ResponseEntity<Void> submitLocationPing(
+			@PathVariable String token,
+			@RequestBody DriverDutyLocationPingRequest payload
+	) {
+		externalDriverDutyService.submitLocationPing(token, payload);
+		return ResponseEntity.noContent().build();
+	}
+
+	@PostMapping("/{token}/sos")
+	public DriverDutySosResponse submitSos(
+			@PathVariable String token,
+			@RequestBody DriverDutySosRequest payload,
+			HttpServletRequest request,
+			@RequestHeader(value = "User-Agent", required = false) String userAgent
+	) {
+		return driverDutySosService.submitSos(token, payload, getClientIp(request), userAgent);
+	}
+
+	@PostMapping(
+			value = "/{token}/incident",
+			consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+	)
+	public DriverDutyIncidentResponse submitIncident(
+			@PathVariable String token,
+			@RequestPart("payload") DriverDutyIncidentRequest payload,
+			@RequestPart(value = "photos", required = false) List<MultipartFile> photos,
+			HttpServletRequest request,
+			@RequestHeader(value = "User-Agent", required = false) String userAgent
+	) throws IOException {
+		return driverDutyIncidentService.submitIncident(token, payload, photos, getClientIp(request), userAgent);
 	}
 
 	private String getClientIp(HttpServletRequest request) {

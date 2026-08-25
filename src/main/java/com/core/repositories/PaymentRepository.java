@@ -1,5 +1,6 @@
 package com.core.repositories;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -11,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import com.core.models.Payment;
+import com.core.models.enums.PaymentGateway;
 import com.core.models.enums.PaymentStatus;
 
 import jakarta.persistence.LockModeType;
@@ -25,6 +27,20 @@ public interface PaymentRepository
 
 	Optional<Payment> findByGatewayOrderId(
 			String gatewayOrderId);
+
+	@Query("""
+		SELECT COALESCE(SUM(p.receivedAmount.amount), 0)
+		FROM Payment p
+		WHERE p.orgId = :orgId
+		  AND p.status = com.core.models.enums.PaymentStatus.CONFIRMED
+		  AND (:from IS NULL OR p.transactionDate >= :from)
+		  AND (:to IS NULL OR p.transactionDate <= :to)
+	""")
+	java.math.BigDecimal sumConfirmedByOrgIdAndDateRange(
+			@Param("orgId") String orgId,
+			@Param("from") Instant from,
+			@Param("to") Instant to
+	);
 
 	boolean existsByBooking_BookingIdAndStatus(
 			String bookingId,
@@ -85,4 +101,10 @@ public interface PaymentRepository
 	List<Payment> findAllByOrgIdAndEstimate_IdOrderByCreatedAtAsc(
 			String orgId,
 			String estimateId);
+
+	List<Payment> findAllByCollectionContextAndStatusAndGatewayAndExpiresAtAfter(
+			String collectionContext,
+			PaymentStatus status,
+			PaymentGateway gateway,
+			Instant expiresAt);
 }

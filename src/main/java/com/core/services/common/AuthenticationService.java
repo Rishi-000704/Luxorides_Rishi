@@ -11,10 +11,13 @@ import java.util.Map;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+
+import lombok.extern.slf4j.Slf4j;
 
 import com.core.config.OtpAuthenticationToken;
 import com.core.dtos.auth.ClientOtpRequest;
@@ -47,6 +50,7 @@ import com.core.services.JwtService;
 import com.core.util.AddressUtil;
 import com.core.dtos.config.EmployeeListItem;
 
+@Slf4j
 @Service
 public class AuthenticationService {
 
@@ -60,14 +64,16 @@ public class AuthenticationService {
 	private final UserOtpRepository userOtpRepository;
 	private final SMSService smsService;
 	private final FileService fileService;
+	private final OtpRecordWriter otpRecordWriter;
 
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+	private static final int OTP_WRITE_MAX_ATTEMPTS = 3;
 
 	public AuthenticationService(UserRepository userRepository, ClientRepository clientRepository,
 			EmployeeRepository employeeRepository, DriverRepository driverRepository,
 			PasswordEncoder passwordEncoder, JwtService jwtService,
 			AuthenticationManager authenticationManager, UserOtpRepository userOtpRepository, SMSService smsService,
-			FileService fileService) {
+			FileService fileService, OtpRecordWriter otpRecordWriter) {
 		super();
 		this.userRepository = userRepository;
 		this.clientRepository = clientRepository;
@@ -79,6 +85,7 @@ public class AuthenticationService {
 		this.userOtpRepository = userOtpRepository;
 		this.smsService = smsService;
 		this.fileService = fileService;
+		this.otpRecordWriter = otpRecordWriter;
 	}
 
 	@Transactional
@@ -115,12 +122,11 @@ public class AuthenticationService {
 	 * of re-implemented per account type.
 	 */
 	private String issueOtp(String orgId, String mobileNumber) {
-		this.userOtpRepository.deleteByPhone(mobileNumber);
 		String otp = generate6DigitOtp();
 		UserOtp record = new UserOtp();
 		record.setPhone(mobileNumber);
 		record.setOtpHash(this.passwordEncoder.encode(otp));
-		this.userOtpRepository.save(record);
+		writeOtpRecordWithRetry(record);
 
 		if (!hasText(orgId)) {
 			throw new BusinessException(ErrorCode.BAD_REQUEST, "Organization is required to send OTP.");
@@ -129,7 +135,7 @@ public class AuthenticationService {
 		boolean sent = this.smsService.sendOtp(orgId, mobileNumber, otp, "10");
 
 		if (!sent) {
-			this.userOtpRepository.delete(record);
+			this.otpRecordWriter.delete(record);
 			throw new BusinessException(
 					ErrorCode.BAD_REQUEST,
 					"Unable to send OTP. SMS provider is not configured for this organization."
@@ -139,7 +145,37 @@ public class AuthenticationService {
 		return otp;
 	}
 
+	/*
+	 * The delete-then-insert in OtpRecordWriter.replace() can deadlock under
+	 * InnoDB when two requests race for the same phone number (e.g. a
+	 * double-tapped "Send OTP" button, or a legitimate resend racing the
+	 * original request) -- each REQUIRES_NEW attempt is its own fresh
+	 * transaction, so retrying here is safe and doesn't reuse a
+	 * transaction that MySQL already aborted.
+	 */
+	private void writeOtpRecordWithRetry(UserOtp record) {
+		for (int attempt = 1; ; attempt++) {
+			try {
+				this.otpRecordWriter.replace(record);
+				return;
+			} catch (PessimisticLockingFailureException deadlock) {
+				if (attempt >= OTP_WRITE_MAX_ATTEMPTS) {
+					throw deadlock;
+				}
+				log.warn("OTP write for phone={} hit a DB lock conflict (attempt {}/{}), retrying: {}",
+						record.getPhone(), attempt, OTP_WRITE_MAX_ATTEMPTS, deadlock.getMessage());
+				try {
+					Thread.sleep(50L * attempt);
+				} catch (InterruptedException interrupted) {
+					Thread.currentThread().interrupt();
+					throw deadlock;
+				}
+			}
+		}
+	}
+
 	@Transactional
+	@SuppressWarnings("null")
 	public LoginResponse verifyOtp(ClientOtpVerifyRequest request) {
 		UserOtp record = this.userOtpRepository.findByPhone(request.mobileNumber());
 		if (record == null) {
@@ -191,6 +227,7 @@ public class AuthenticationService {
 	}
 
 	@Transactional
+	@SuppressWarnings("null")
 	public LoginResponse verifyDriverOtp(DriverOtpVerifyRequest request) {
 		UserOtp record = this.userOtpRepository.findByPhone(request.mobileNumber());
 		if (record == null) {

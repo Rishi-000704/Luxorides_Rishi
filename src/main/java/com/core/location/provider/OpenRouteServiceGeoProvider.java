@@ -1,5 +1,6 @@
 package com.core.location.provider;
 
+import java.util.List;
 import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import com.core.location.api.DistanceTimeResult;
+import com.core.location.api.GeoPoint;
 import com.core.location.provider.dto.OrsDirectionsResponse;
 import com.core.models.embedded.AddressSnapshot;
 
@@ -93,13 +95,33 @@ public class OpenRouteServiceGeoProvider implements GeoProvider {
 
 		validateResponse(response, start, end);
 
-		var summary = response.features().get(0).properties().summary();
+		var feature = response.features().get(0);
+		var summary = feature.properties().summary();
 
 		return new DistanceTimeResult(
 				summary.distance() / 1000.0,
 				summary.duration().longValue(),
-				false
+				false,
+				getName(),
+				extractGeometry(feature)
 		);
+	}
+
+	/**
+	 * Converts ORS's GeoJSON [lon, lat] coordinate pairs into {@link GeoPoint}s.
+	 * Never throws -- a missing/malformed geometry just means no road route can be
+	 * drawn on the map; distance/duration (already validated above) are unaffected.
+	 */
+	List<GeoPoint> extractGeometry(OrsDirectionsResponse.Feature feature) {
+		if (feature.geometry() == null || feature.geometry().coordinates() == null) {
+			return null;
+		}
+
+		return feature.geometry().coordinates()
+				.stream()
+				.filter(coordinate -> coordinate != null && coordinate.size() >= 2)
+				.map(coordinate -> new GeoPoint(coordinate.get(1), coordinate.get(0)))
+				.toList();
 	}
 
 	private void validateResponse(

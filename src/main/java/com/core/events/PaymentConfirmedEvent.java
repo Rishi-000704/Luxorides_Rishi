@@ -11,5 +11,7 @@ public record PaymentConfirmedEvent(
 
         String amountPaid,
         String paymentDate,
-        String paymentMethod
+        String paymentMethod,
+
+        String dutyId
         ) {}

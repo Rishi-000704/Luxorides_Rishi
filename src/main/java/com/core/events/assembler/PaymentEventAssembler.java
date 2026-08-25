@@ -15,6 +15,8 @@ import com.core.util.DateFormatUtil;
 @Component
 public class PaymentEventAssembler {
 
+	private static final String DRIVER_DUTY_QR_CONTEXT = "DRIVER_DUTY_QR";
+
 	public PaymentConfirmedEvent
 	toPaymentConfirmedEvent(
 
@@ -57,7 +59,11 @@ public class PaymentEventAssembler {
 
 				payment
 						.getPaymentMode()
-						.name());
+						.name(),
+
+				DRIVER_DUTY_QR_CONTEXT.equals(payment.getCollectionContext())
+						? payment.getCollectionContextId()
+						: null);
 	}
 
 	public PaymentPendingEvent

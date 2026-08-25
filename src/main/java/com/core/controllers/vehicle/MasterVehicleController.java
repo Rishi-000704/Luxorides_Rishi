@@ -64,6 +64,7 @@ public class MasterVehicleController {
 
 	@GetMapping("/page")
 	@PreAuthorize("hasAuthority('MASTER_VEHICLE_VIEW')")
+	@SuppressWarnings("null")
 	public Page<MasterVehicleDTO> page(@RequestParam(required = false) String search,
 			@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "10") int size,
 			@RequestParam(defaultValue = "name") String sortBy,

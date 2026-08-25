@@ -7,6 +7,11 @@ import lombok.Data;
 @Builder
 public class RazorpayCheckoutPayload {
 
+    /** "RAZORPAY" for a real order, "MOCK" for the dev-only dummy gateway -- lets the
+     *  frontend skip opening the real Razorpay checkout widget for a mock order. */
+    @Builder.Default
+    private String gateway = "RAZORPAY";
+
     private String key;
     private String orderId;
     private long amount; // paise

@@ -1,5 +1,6 @@
 package com.core.repositories;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -23,6 +24,41 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 	 * ------------------------------------------------- Core lookups
 	 * -------------------------------------------------
 	 */
+
+	/*
+	 * Real historical booking-creation timestamps for DemandForecastService --
+	 * bucketed in Java (hour-of-day / day-of-week), not via a DB-specific
+	 * date function, to stay portable. Fleet-operator booking volume is small
+	 * enough that fetching raw timestamps for a bounded window is fine.
+	 */
+	@Query("SELECT b.createdAt FROM Booking b WHERE b.orgId = :orgId AND b.createdAt >= :since")
+	List<Instant> findCreatedAtSince(@Param("orgId") String orgId, @Param("since") Instant since);
+
+	/*
+	 * Real anomaly-detection aggregates for FraudSignalService -- HAVING
+	 * COUNT(...) >= :threshold does the real thresholding in SQL, not a
+	 * fabricated/guessed severity.
+	 */
+	@Query("""
+		SELECT b.clientId, COUNT(b)
+		FROM Booking b
+		WHERE b.orgId = :orgId AND b.createdAt >= :since AND b.clientId IS NOT NULL
+		GROUP BY b.clientId
+		HAVING COUNT(b) >= :threshold
+	""")
+	List<Object[]> findClientsWithRapidBookings(
+			@Param("orgId") String orgId, @Param("since") Instant since, @Param("threshold") long threshold);
+
+	@Query("""
+		SELECT b.clientId, COUNT(b)
+		FROM Booking b
+		WHERE b.orgId = :orgId AND b.status = com.core.models.enums.BookingStatus.CANCELLED
+		  AND b.updatedAt >= :since AND b.clientId IS NOT NULL
+		GROUP BY b.clientId
+		HAVING COUNT(b) >= :threshold
+	""")
+	List<Object[]> findClientsWithRepeatedCancellations(
+			@Param("orgId") String orgId, @Param("since") Instant since, @Param("threshold") long threshold);
 
 	Optional<Booking> findByBookingIdAndOrgId(String bookingId, String orgId);
 
