@@ -1,5 +1,6 @@
 package com.core.services;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.springframework.data.domain.Page;
@@ -8,6 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.core.dtos.driverduty.DriverAppDutyTokenResponse;
+import com.core.dtos.driverduty.DriverDutyAcceptanceResponse;
+import com.core.dtos.driverduty.DriverDutyDeclineRequest;
+import com.core.dtos.driverduty.DriverDutyDeclineResponse;
 import com.core.dtos.driverduty.DriverDutyLinkResponse;
 import com.core.dtos.driverduty.DutySummaryForDriverDTO;
 import com.core.exception.BusinessException;
@@ -16,8 +20,10 @@ import com.core.exception.NotFoundException;
 import com.core.models.BookingEntry;
 import com.core.models.Driver;
 import com.core.models.enums.BookingStatus;
+import com.core.models.enums.DriverDutyCheckpointType;
 import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
+import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -43,6 +49,7 @@ public class DriverAppService {
 	private final BookingEntryRepository bookingEntryRepository;
 	private final DriverRepository driverRepository;
 	private final ExternalDriverDutyService externalDriverDutyService;
+	private final DriverDutyCheckpointRepository checkpointRepository;
 
 	@Transactional(readOnly = true)
 	public Page<DutySummaryForDriverDTO> getActiveDuties(String orgId, String userId, Pageable pageable) {
@@ -67,6 +74,64 @@ public class DriverAppService {
 	}
 
 	@Transactional
+	public DriverDutyAcceptanceResponse acceptDuty(String orgId, String userId, String dutyId) {
+		Driver driver = resolveDriver(orgId, userId);
+		BookingEntry unlocked = findOwnedDuty(orgId, driver.getId(), dutyId);
+		BookingEntry entry = lockEntry(unlocked.getId());
+
+		if (entry.getDriverAcceptedAt() != null) {
+			// Idempotent -- a retried/duplicate accept tap is a no-op success, not an error.
+			return new DriverDutyAcceptanceResponse(entry.getDutyId(), true, entry.getDriverAcceptedAt());
+		}
+
+		if (entry.getStatus() != DutyStatus.ALLOTTED) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"This duty can no longer be accepted (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		Instant acceptedAt = Instant.now();
+		entry.setDriverAcceptedAt(acceptedAt);
+		entry.setDriverDeclinedAt(null);
+		entry.setDriverDeclineReason(null);
+		bookingEntryRepository.save(entry);
+
+		return new DriverDutyAcceptanceResponse(entry.getDutyId(), true, acceptedAt);
+	}
+
+	@Transactional
+	public DriverDutyDeclineResponse declineDuty(String orgId, String userId, String dutyId, DriverDutyDeclineRequest request) {
+		Driver driver = resolveDriver(orgId, userId);
+		BookingEntry unlocked = findOwnedDuty(orgId, driver.getId(), dutyId);
+		BookingEntry entry = lockEntry(unlocked.getId());
+
+		String reason = request == null || request.reason() == null ? null : request.reason().trim();
+		if (reason == null || reason.isBlank()) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "A reason is required to decline a duty");
+		}
+
+		if (entry.getDriverDeclinedAt() != null) {
+			// Idempotent -- a retried/duplicate decline tap is a no-op success, not an error.
+			return new DriverDutyDeclineResponse(entry.getDutyId(), true, entry.getDriverDeclinedAt(), entry.getDriverDeclineReason());
+		}
+
+		if (entry.getStatus() != DutyStatus.ALLOTTED) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"This duty can no longer be declined (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		Instant declinedAt = Instant.now();
+		entry.setDriverDeclinedAt(declinedAt);
+		entry.setDriverDeclineReason(reason);
+		bookingEntryRepository.save(entry);
+
+		return new DriverDutyDeclineResponse(entry.getDutyId(), true, declinedAt, reason);
+	}
+
+	@Transactional
 	public DriverAppDutyTokenResponse issueExecutionToken(String orgId, String userId, String dutyId) {
 		Driver driver = resolveDriver(orgId, userId);
 		BookingEntry entry = findOwnedDuty(orgId, driver.getId(), dutyId);
@@ -75,6 +140,13 @@ public class DriverAppService {
 			throw new BusinessException(
 					ErrorCode.INVALID_DUTY_STATUS,
 					"This duty is not available for execution right now (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		if (entry.getStatus() == DutyStatus.ALLOTTED && entry.getDriverAcceptedAt() == null) {
+			throw new BusinessException(
+					ErrorCode.ACCESS_DENIED,
+					"Accept this duty before starting it"
 			);
 		}
 
@@ -119,6 +191,17 @@ public class DriverAppService {
 				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
 	}
 
+	/*
+	 * Ownership (org + driver) is already checked by findOwnedDuty's query above
+	 * this is called after -- this only takes the PESSIMISTIC_WRITE lock by id,
+	 * same pattern as ExternalDriverDutyService.lockEntryForDutyExecution, to
+	 * protect accept/decline against a genuine double-tap race.
+	 */
+	private BookingEntry lockEntry(String entryId) {
+		return bookingEntryRepository.lockById(entryId)
+				.orElseThrow(() -> new NotFoundException(ErrorCode.DUTY_NOT_FOUND, "Duty not found"));
+	}
+
 	private DutySummaryForDriverDTO toSummary(BookingEntry e) {
 		return new DutySummaryForDriverDTO(
 				e.getDutyId(),
@@ -142,7 +225,25 @@ public class DriverAppService {
 				e.getStartAt(),
 				e.getEndAt(),
 
-				e.getDutyTotal()
+				e.getDutyTotal(),
+
+				e.getDriverAcceptedAt(),
+				e.getDriverDeclinedAt(),
+				e.getPickupOtpVerifiedAt(),
+
+				// Real checkpoint lookups, same source of truth
+				// ExternalDriverDutyService.confirmGarageReturn/closeDutyFromDriverApp
+				// write to -- lets the mobile app's crash-recovery logic (resumeDuty.ts)
+				// resume into the correct post-completion screen instead of guessing
+				// from local state alone.
+				checkpointRepository
+						.findFirstByBookingEntry_IdAndCheckpointTypeOrderBySubmittedAtDesc(e.getId(), DriverDutyCheckpointType.GARAGE_RETURN)
+						.map(c -> c.getSubmittedAt())
+						.orElse(null),
+				checkpointRepository
+						.findFirstByBookingEntry_IdAndCheckpointTypeOrderBySubmittedAtDesc(e.getId(), DriverDutyCheckpointType.CLOSE)
+						.map(c -> c.getSubmittedAt())
+						.orElse(null)
 		);
 	}
 }

@@ -19,5 +19,15 @@ public record DutyCompletionSummary(
 		// -- untouched to avoid perturbing existing fare/odometer semantics). --
 		Integer actualDrivenKm,
 		Double projectedTotalKm,
-		ReturnRouteEstimate returnRoute
+		ReturnRouteEstimate returnRoute,
+		// -- Package/rate-card breakdown behind dutyTotal (base fare, included km/time,
+		// -- extra km/time chargeable + their rates) -- see PackageFareBreakdownFactory.
+		PackageFareBreakdown fareBreakdown,
+		// -- Booking-level GST already folded into bookingTotal/amountToCollect by
+		// -- BookingUtil.calculateTotalAmount. Zero/null for GST-exempt orgs (today's
+		// -- seeded default). Surfaced so a driver-facing fare breakdown that lists
+		// -- bookingTotal's components doesn't appear to under-add for a GST-registered
+		// -- org -- never itself added into any total, only displayed.
+		BigDecimal gstAmount,
+		Integer gstRatePercent
 	) {}

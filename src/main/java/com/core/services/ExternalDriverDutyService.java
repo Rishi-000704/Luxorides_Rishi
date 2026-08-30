@@ -13,21 +13,29 @@ import java.util.Optional;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
 import com.core.dtos.driverduty.DriverDutyExpenseInput;
 import com.core.dtos.driverduty.DriverDutyLinkResponse;
 import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
 import com.core.dtos.driverduty.DriverDutyLocationResponse;
+import com.core.dtos.driverduty.DriverDutyReturnGarageRequest;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
 import com.core.dtos.driverduty.DutyCompletionSummary;
+import com.core.dtos.driverduty.GarageReturnConfirmationResponse;
+import com.core.dtos.driverduty.PackageFareBreakdown;
 import com.core.dtos.driverduty.PaymentInstruction;
+import com.core.dtos.driverduty.PickupOtpGenerateResponse;
+import com.core.dtos.driverduty.PickupOtpVerifyRequest;
+import com.core.dtos.driverduty.PickupOtpVerifyResponse;
 import com.core.dtos.driverduty.ReturnRouteEstimate;
 import com.core.events.DutyStartedEvent;
 import com.core.exception.BusinessException;
@@ -48,6 +56,7 @@ import com.core.models.DriverDutyExpense;
 import com.core.models.DriverDutyLiveLocation;
 import com.core.models.ExtraCharge;
 import com.core.models.embedded.AddressSnapshot;
+import com.core.models.embedded.GstSnapshot;
 import com.core.models.embedded.Money;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DriverDutyCheckpointStatus;
@@ -65,7 +74,9 @@ import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.DriverDutyLiveLocationRepository;
 import com.core.services.common.FileService;
+import com.core.services.common.SMSService;
 import com.core.util.BookingUtil;
+import com.core.util.PackageFareBreakdownFactory;
 import com.core.util.EtaEstimator;
 import com.core.ws.DutyLocationChannelRegistry;
 
@@ -92,6 +103,8 @@ public class ExternalDriverDutyService {
 	private final DriverDutyLiveLocationRepository liveLocationRepository;
 	private final DutyLocationChannelRegistry dutyLocationChannelRegistry;
 	private final FraudSignalService fraudSignalService;
+	private final PasswordEncoder passwordEncoder;
+	private final SMSService smsService;
 
 	/*
 	 * Use LocationService here instead of directly injecting GeoProvider.
@@ -352,6 +365,116 @@ public class ExternalDriverDutyService {
 
 	/*
 	 * =========================================================
+	 * PUBLIC SIDE: PICKUP OTP
+	 * =========================================================
+	 * Real, server-verified pickup verification. The OTP is generated here,
+	 * SMS'd to the customer on the booking (never the driver), hashed with
+	 * the same PasswordEncoder used for login OTPs, and verified server-side
+	 * only -- the mobile app never has a client-side success condition for
+	 * this step. Reuses SMSService.sendOtp (same provider config/template as
+	 * login OTP) rather than inventing a second SMS pathway.
+	 */
+
+	private static final int PICKUP_OTP_TTL_MINUTES = 10;
+	private static final int PICKUP_OTP_MAX_ATTEMPTS = 5;
+
+	@Transactional
+	public PickupOtpGenerateResponse generatePickupOtp(String rawToken) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.RUNNING) {
+			throw new BusinessException(
+					ErrorCode.DUTY_NOT_RUNNING,
+					"Duty must be started before generating a pickup OTP"
+			);
+		}
+
+		if (entry.getPickupOtpVerifiedAt() != null) {
+			// Idempotent -- pickup was already verified, nothing left to (re)send.
+			return new PickupOtpGenerateResponse(true, 0, true);
+		}
+
+		String customerPhone = entry.getBooking().getClient() != null
+				? entry.getBooking().getClient().getPhone()
+				: null;
+
+		if (customerPhone == null || customerPhone.isBlank()) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "Customer phone number is not available for this booking");
+		}
+
+		String otp = generate6DigitOtp();
+		entry.setPickupOtpHash(passwordEncoder.encode(otp));
+		entry.setPickupOtpExpiresAt(Instant.now().plus(Duration.ofMinutes(PICKUP_OTP_TTL_MINUTES)));
+		entry.setPickupOtpAttempts(0);
+		bookingEntryRepository.save(entry);
+
+		boolean sent = smsService.sendOtp(accessToken.getOrgId(), customerPhone, otp, String.valueOf(PICKUP_OTP_TTL_MINUTES));
+
+		if (!sent) {
+			// Don't strand the driver on a code that was never actually delivered.
+			entry.setPickupOtpHash(null);
+			entry.setPickupOtpExpiresAt(null);
+			entry.setPickupOtpAttempts(null);
+			bookingEntryRepository.save(entry);
+
+			throw new BusinessException(
+					ErrorCode.BAD_REQUEST,
+					"Unable to send pickup OTP. SMS provider is not configured for this organization."
+			);
+		}
+
+		return new PickupOtpGenerateResponse(true, PICKUP_OTP_TTL_MINUTES * 60, false);
+	}
+
+	@Transactional
+	public PickupOtpVerifyResponse verifyPickupOtp(String rawToken, PickupOtpVerifyRequest request) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getPickupOtpVerifiedAt() != null) {
+			// Idempotent -- a retried/duplicate verify tap is a no-op success.
+			return new PickupOtpVerifyResponse(true, entry.getPickupOtpVerifiedAt());
+		}
+
+		if (entry.getPickupOtpHash() == null || entry.getPickupOtpExpiresAt() == null) {
+			throw new BusinessException(ErrorCode.OTP_NOT_INITIATED, "No pickup OTP has been generated for this duty yet");
+		}
+
+		if (Instant.now().isAfter(entry.getPickupOtpExpiresAt())) {
+			throw new BusinessException(ErrorCode.OTP_EXPIRED, "Pickup OTP has expired. Ask the client to resend it.");
+		}
+
+		String submitted = request == null || request.otp() == null ? "" : request.otp().trim();
+
+		if (submitted.isBlank() || !passwordEncoder.matches(submitted, entry.getPickupOtpHash())) {
+			int attempts = (entry.getPickupOtpAttempts() == null ? 0 : entry.getPickupOtpAttempts()) + 1;
+			entry.setPickupOtpAttempts(attempts);
+
+			if (attempts >= PICKUP_OTP_MAX_ATTEMPTS) {
+				entry.setPickupOtpHash(null);
+				entry.setPickupOtpExpiresAt(null);
+				bookingEntryRepository.save(entry);
+
+				throw new BusinessException(
+						ErrorCode.OTP_MAX_ATTEMPTS_EXCEEDED,
+						"Too many incorrect attempts. Ask the client to resend the OTP."
+				);
+			}
+
+			bookingEntryRepository.save(entry);
+			throw new BusinessException(ErrorCode.OTP_INVALID, "Incorrect code. Ask the client to confirm the OTP.");
+		}
+
+		Instant verifiedAt = Instant.now();
+		entry.setPickupOtpVerifiedAt(verifiedAt);
+		bookingEntryRepository.save(entry);
+
+		return new PickupOtpVerifyResponse(true, verifiedAt);
+	}
+
+	/*
+	 * =========================================================
 	 * PUBLIC SIDE: END / DROP SUBMISSION
 	 * =========================================================
 	 */
@@ -475,6 +598,10 @@ public class ExternalDriverDutyService {
 				garageReturn.routeGeometry()
 		);
 
+		PackageFareBreakdown fareBreakdown = PackageFareBreakdownFactory.build(entry);
+
+		GstSnapshot gstSnapshot = savedBooking.getGstSnapshot();
+
 		DutyCompletionSummary summary = new DutyCompletionSummary(
 				savedBooking.getBookingId(),
 				entry.getDutyId(),
@@ -488,7 +615,10 @@ public class ExternalDriverDutyService {
 				amountToCollect,
 				actualDrivenKm,
 				projectedTotalKm,
-				returnRoute
+				returnRoute,
+				fareBreakdown,
+				gstSnapshot != null ? gstSnapshot.getTotalTax() : null,
+				gstSnapshot != null ? gstSnapshot.getGstRate() : null
 		);
 
 		return new DriverDutyEndResponse(
@@ -694,6 +824,120 @@ public class ExternalDriverDutyService {
 					.message("Unable to verify payment right now")
 					.build();
 		}
+	}
+
+	/*
+	 * =========================================================
+	 * RETURN TO GARAGE / CLOSE DUTY
+	 * =========================================================
+	 * DutyStatus already reaches COMPLETED inside submitEnd above (fare +
+	 * payment are already final at that point) -- these two steps don't
+	 * transition any status. They record real, backend-persisted
+	 * confirmations of what the driver actually reports next: physically
+	 * arriving back at the garage, then closing the duty out. Reusing the
+	 * existing DriverDutyCheckpoint entity/pattern (same as START/END)
+	 * instead of inventing a parallel concept. resolveTokenForPaymentStatus,
+	 * not resolveValidToken -- submitEnd already flips the token to
+	 * COMPLETED and these two calls must keep working after that, the same
+	 * carve-out payment polling already relies on.
+	 */
+
+	@Transactional
+	public GarageReturnConfirmationResponse confirmGarageReturn(
+			String rawToken,
+			DriverDutyReturnGarageRequest request,
+			String ipAddress,
+			String userAgent
+	) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveTokenForPaymentStatus(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.COMPLETED) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"Complete the drop-off and payment before confirming garage return (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		Optional<DriverDutyCheckpoint> existing = checkpointRepository
+				.findFirstByBookingEntry_IdAndCheckpointTypeOrderBySubmittedAtDesc(entry.getId(), DriverDutyCheckpointType.GARAGE_RETURN);
+
+		if (existing.isPresent()) {
+			// Idempotent -- app restart / duplicate tap replays the same confirmation.
+			return new GarageReturnConfirmationResponse(true, existing.get().getSubmittedAt());
+		}
+
+		AddressSnapshot location = request != null ? normalizeDriverLocation(request.location()) : null;
+		Instant submittedAt = Instant.now();
+
+		DriverDutyCheckpoint checkpoint = new DriverDutyCheckpoint();
+		checkpoint.setOrgId(accessToken.getOrgId());
+		checkpoint.setBookingId(entry.getBooking().getBookingId());
+		checkpoint.setDutyId(entry.getDutyId());
+		checkpoint.setDriverId(entry.getDriverId());
+		checkpoint.setFleetVehicleId(entry.getFleetVehicleId());
+		checkpoint.setBookingEntry(entry);
+		checkpoint.setCheckpointType(DriverDutyCheckpointType.GARAGE_RETURN);
+		checkpoint.setStatus(locationPresent(location)
+				? DriverDutyCheckpointStatus.ACCEPTED
+				: DriverDutyCheckpointStatus.NEEDS_REVIEW);
+		checkpoint.setLocation(location);
+		checkpoint.setAccuracyMeters(request != null ? request.accuracyMeters() : null);
+		checkpoint.setLocationCapturedAt(request != null ? request.locationCapturedAt() : null);
+		checkpoint.setSubmittedAt(submittedAt);
+		checkpoint.setIpAddress(ipAddress);
+		checkpoint.setUserAgent(userAgent);
+
+		checkpointRepository.save(checkpoint);
+
+		return new GarageReturnConfirmationResponse(true, submittedAt);
+	}
+
+	@Transactional
+	public CloseDutyConfirmationResponse closeDutyFromDriverApp(String rawToken, String ipAddress, String userAgent) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveTokenForPaymentStatus(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.COMPLETED) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"Duty must be completed before it can be closed (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		boolean garageReturnConfirmed = checkpointRepository.existsByBookingEntry_IdAndCheckpointType(
+				entry.getId(), DriverDutyCheckpointType.GARAGE_RETURN);
+
+		if (!garageReturnConfirmed) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "Confirm garage return before closing this duty");
+		}
+
+		Optional<DriverDutyCheckpoint> existing = checkpointRepository
+				.findFirstByBookingEntry_IdAndCheckpointTypeOrderBySubmittedAtDesc(entry.getId(), DriverDutyCheckpointType.CLOSE);
+
+		if (existing.isPresent()) {
+			// Idempotent -- double-close is a no-op success, not an error.
+			return new CloseDutyConfirmationResponse(true, existing.get().getSubmittedAt());
+		}
+
+		Instant submittedAt = Instant.now();
+
+		DriverDutyCheckpoint checkpoint = new DriverDutyCheckpoint();
+		checkpoint.setOrgId(accessToken.getOrgId());
+		checkpoint.setBookingId(entry.getBooking().getBookingId());
+		checkpoint.setDutyId(entry.getDutyId());
+		checkpoint.setDriverId(entry.getDriverId());
+		checkpoint.setFleetVehicleId(entry.getFleetVehicleId());
+		checkpoint.setBookingEntry(entry);
+		checkpoint.setCheckpointType(DriverDutyCheckpointType.CLOSE);
+		checkpoint.setStatus(DriverDutyCheckpointStatus.ACCEPTED);
+		checkpoint.setSubmittedAt(submittedAt);
+		checkpoint.setIpAddress(ipAddress);
+		checkpoint.setUserAgent(userAgent);
+
+		checkpointRepository.save(checkpoint);
+
+		return new CloseDutyConfirmationResponse(true, submittedAt);
 	}
 
 	/*
@@ -933,6 +1177,10 @@ public class ExternalDriverDutyService {
 		if (km == null || km < 0) {
 			throw new BusinessException(ErrorCode.BAD_REQUEST, message);
 		}
+	}
+
+	private static String generate6DigitOtp() {
+		return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
 	}
 
 	private Instant calculateDriverDutyLinkExpiry(BookingEntry entry) {

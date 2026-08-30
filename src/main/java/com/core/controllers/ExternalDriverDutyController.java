@@ -15,17 +15,23 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
 import com.core.dtos.driverduty.DriverDutyIncidentRequest;
 import com.core.dtos.driverduty.DriverDutyIncidentResponse;
 import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
 import com.core.dtos.driverduty.DriverDutyLocationResponse;
+import com.core.dtos.driverduty.DriverDutyReturnGarageRequest;
 import com.core.dtos.driverduty.DriverDutySosRequest;
 import com.core.dtos.driverduty.DriverDutySosResponse;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
+import com.core.dtos.driverduty.GarageReturnConfirmationResponse;
+import com.core.dtos.driverduty.PickupOtpGenerateResponse;
+import com.core.dtos.driverduty.PickupOtpVerifyRequest;
+import com.core.dtos.driverduty.PickupOtpVerifyResponse;
 import com.core.gateway.razerpay.QrPaymentStatusResponse;
 import com.core.services.DriverDutyIncidentService;
 import com.core.services.DriverDutySosService;
@@ -94,6 +100,38 @@ public class ExternalDriverDutyController {
 				getClientIp(request),
 				userAgent
 		);
+	}
+
+	@PostMapping("/{token}/pickup-otp/generate")
+	public PickupOtpGenerateResponse generatePickupOtp(@PathVariable String token) {
+		return externalDriverDutyService.generatePickupOtp(token);
+	}
+
+	@PostMapping("/{token}/pickup-otp/verify")
+	public PickupOtpVerifyResponse verifyPickupOtp(
+			@PathVariable String token,
+			@RequestBody PickupOtpVerifyRequest payload
+	) {
+		return externalDriverDutyService.verifyPickupOtp(token, payload);
+	}
+
+	@PostMapping("/{token}/return-garage")
+	public GarageReturnConfirmationResponse confirmGarageReturn(
+			@PathVariable String token,
+			@RequestBody(required = false) DriverDutyReturnGarageRequest payload,
+			HttpServletRequest request,
+			@RequestHeader(value = "User-Agent", required = false) String userAgent
+	) {
+		return externalDriverDutyService.confirmGarageReturn(token, payload, getClientIp(request), userAgent);
+	}
+
+	@PostMapping("/{token}/close")
+	public CloseDutyConfirmationResponse closeDuty(
+			@PathVariable String token,
+			HttpServletRequest request,
+			@RequestHeader(value = "User-Agent", required = false) String userAgent
+	) {
+		return externalDriverDutyService.closeDutyFromDriverApp(token, getClientIp(request), userAgent);
 	}
 
 	@PostMapping("/{token}/location")

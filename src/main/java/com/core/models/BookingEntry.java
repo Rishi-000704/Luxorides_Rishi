@@ -148,4 +148,32 @@ public class BookingEntry extends AuditableEntity {
 
 	@Column(length = 500)
 	private String clientNotes;
+
+	/*
+	 * Real driver acceptance state for the mobile app's Accept/Decline step
+	 * (Phase 1). Deliberately NOT a new DutyStatus value: DutyStatus is
+	 * consumed by the ops app board, dispatch, and reporting, none of which
+	 * this phase touches -- these fields are an additive, driver-app-only
+	 * concept layered on top of the existing ALLOTTED -> RUNNING transition,
+	 * not a replacement for it. issueExecutionToken() requires
+	 * driverAcceptedAt to be set before a duty can be started.
+	 */
+	private Instant driverAcceptedAt;
+	private Instant driverDeclinedAt;
+
+	@Column(length = 255)
+	private String driverDeclineReason;
+
+	/*
+	 * Real, server-verified pickup OTP (Phase 1). Hashed with the same
+	 * PasswordEncoder used for login OTPs -- never stored or logged in
+	 * plaintext. Reset on re-allotment (see BookingService.reAllotDuty) so a
+	 * newly-assigned driver can't inherit a stale verification.
+	 */
+	@Column(length = 100)
+	private String pickupOtpHash;
+
+	private Instant pickupOtpExpiresAt;
+	private Integer pickupOtpAttempts;
+	private Instant pickupOtpVerifiedAt;
 }

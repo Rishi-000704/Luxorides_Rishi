@@ -413,12 +413,28 @@ public class BookingService {
 				"re-allot duty"
 		);
 
+		boolean driverChanged = !cmd.driverId().equals(entry.getDriverId());
+
 		entry.setDriverId(cmd.driverId());
 		entry.setSupplierId(cmd.supplierId());
 		entry.setFleetVehicleId(cmd.fleetVehicleId());
 
 		entry.setAllotedVehicle(fleetVehicleService.get(cmd.fleetVehicleId()));
 		entry.setDriver(driverService.getDriver(cmd.driverId(), orgId));
+
+		if (driverChanged) {
+			// A different driver now owns this duty -- the previous driver's
+			// accept/decline decision and any pickup OTP issued to them must not
+			// leak forward. The newly-assigned driver goes through their own
+			// real accept step (see DriverAppService.issueExecutionToken's gate).
+			entry.setDriverAcceptedAt(null);
+			entry.setDriverDeclinedAt(null);
+			entry.setDriverDeclineReason(null);
+			entry.setPickupOtpHash(null);
+			entry.setPickupOtpExpiresAt(null);
+			entry.setPickupOtpAttempts(null);
+			entry.setPickupOtpVerifiedAt(null);
+		}
 
 		bookingEntryRepository.save(entry);
 

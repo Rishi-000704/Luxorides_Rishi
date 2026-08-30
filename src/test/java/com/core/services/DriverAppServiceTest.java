@@ -17,6 +17,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 import com.core.dtos.driverduty.DriverAppDutyTokenResponse;
+import com.core.dtos.driverduty.DriverDutyAcceptanceResponse;
+import com.core.dtos.driverduty.DriverDutyDeclineRequest;
+import com.core.dtos.driverduty.DriverDutyDeclineResponse;
 import com.core.dtos.driverduty.DriverDutyLinkResponse;
 import com.core.exception.BusinessException;
 import com.core.exception.NotFoundException;
@@ -26,6 +29,7 @@ import com.core.models.Driver;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
+import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverRepository;
 
 /*
@@ -40,10 +44,12 @@ class DriverAppServiceTest {
 	private static final String DRIVER_ID = "driver-1";
 	private static final String DUTY_ID = "duty-1";
 	private static final String BOOKING_ID = "booking-1";
+	private static final String ENTRY_ID = "entry-1";
 
 	private BookingEntryRepository bookingEntryRepository;
 	private DriverRepository driverRepository;
 	private ExternalDriverDutyService externalDriverDutyService;
+	private DriverDutyCheckpointRepository checkpointRepository;
 	private DriverAppService service;
 	private Driver driver;
 
@@ -52,7 +58,8 @@ class DriverAppServiceTest {
 		bookingEntryRepository = mock(BookingEntryRepository.class);
 		driverRepository = mock(DriverRepository.class);
 		externalDriverDutyService = mock(ExternalDriverDutyService.class);
-		service = new DriverAppService(bookingEntryRepository, driverRepository, externalDriverDutyService);
+		checkpointRepository = mock(DriverDutyCheckpointRepository.class);
+		service = new DriverAppService(bookingEntryRepository, driverRepository, externalDriverDutyService, checkpointRepository);
 
 		driver = new Driver();
 		driver.setId(DRIVER_ID);
@@ -95,8 +102,18 @@ class DriverAppServiceTest {
 	}
 
 	@Test
+	void issueExecutionToken_rejectsAllottedDutyThatHasNotBeenAccepted() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+
+		assertThrows(BusinessException.class,
+				() -> service.issueExecutionToken(ORG_ID, USER_ID, DUTY_ID));
+	}
+
+	@Test
 	void issueExecutionToken_delegatesToExistingLinkService_andExtractsRawToken() {
 		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		entry.setDriverAcceptedAt(Instant.now());
 		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
 
 		Instant expiry = Instant.now().plusSeconds(3600);
@@ -123,12 +140,102 @@ class DriverAppServiceTest {
 				() -> service.issueExecutionToken(ORG_ID, USER_ID, DUTY_ID));
 	}
 
+	@Test
+	void acceptDuty_setsAcceptedTimestamp_whenAllotted() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		DriverDutyAcceptanceResponse response = service.acceptDuty(ORG_ID, USER_ID, DUTY_ID);
+
+		assertEquals(DUTY_ID, response.dutyId());
+		assertEquals(true, response.accepted());
+		assertEquals(entry.getDriverAcceptedAt(), response.acceptedAt());
+	}
+
+	@Test
+	void acceptDuty_isIdempotent_onDuplicateAccept() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		Instant firstAccept = Instant.now().minusSeconds(60);
+		entry.setDriverAcceptedAt(firstAccept);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		DriverDutyAcceptanceResponse response = service.acceptDuty(ORG_ID, USER_ID, DUTY_ID);
+
+		assertEquals(firstAccept, response.acceptedAt());
+	}
+
+	@Test
+	void acceptDuty_rejectsDutyNotInAllottedState() {
+		BookingEntry entry = duty(DutyStatus.RUNNING);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		assertThrows(BusinessException.class, () -> service.acceptDuty(ORG_ID, USER_ID, DUTY_ID));
+	}
+
+	@Test
+	void acceptDuty_rejectsDutyNotBelongingToCaller() {
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.empty());
+
+		assertThrows(NotFoundException.class, () -> service.acceptDuty(ORG_ID, USER_ID, DUTY_ID));
+	}
+
+	@Test
+	void declineDuty_setsDeclinedTimestampAndReason_whenAllotted() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		DriverDutyDeclineResponse response = service.declineDuty(ORG_ID, USER_ID, DUTY_ID, new DriverDutyDeclineRequest("Vehicle unavailable"));
+
+		assertEquals(true, response.declined());
+		assertEquals("Vehicle unavailable", response.reason());
+	}
+
+	@Test
+	void declineDuty_isIdempotent_onDuplicateDecline() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		Instant firstDecline = Instant.now().minusSeconds(60);
+		entry.setDriverDeclinedAt(firstDecline);
+		entry.setDriverDeclineReason("Health issue");
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		DriverDutyDeclineResponse response = service.declineDuty(ORG_ID, USER_ID, DUTY_ID, new DriverDutyDeclineRequest("Different reason"));
+
+		assertEquals(firstDecline, response.declinedAt());
+		assertEquals("Health issue", response.reason());
+	}
+
+	@Test
+	void declineDuty_rejectsBlankReason() {
+		BookingEntry entry = duty(DutyStatus.ALLOTTED);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		assertThrows(BusinessException.class,
+				() -> service.declineDuty(ORG_ID, USER_ID, DUTY_ID, new DriverDutyDeclineRequest("   ")));
+	}
+
+	@Test
+	void declineDuty_rejectsDutyAlreadyRunning() {
+		BookingEntry entry = duty(DutyStatus.RUNNING);
+		when(bookingEntryRepository.findForDriverSelf(ORG_ID, DRIVER_ID, DUTY_ID)).thenReturn(Optional.of(entry));
+		when(bookingEntryRepository.lockById(ENTRY_ID)).thenReturn(Optional.of(entry));
+
+		assertThrows(BusinessException.class,
+				() -> service.declineDuty(ORG_ID, USER_ID, DUTY_ID, new DriverDutyDeclineRequest("Too late")));
+	}
+
 	private BookingEntry duty(DutyStatus status) {
 		Booking booking = new Booking();
 		booking.setBookingId(BOOKING_ID);
 		booking.setStatus(BookingStatus.CONFIRMED);
 
 		BookingEntry entry = new BookingEntry();
+		entry.setId(ENTRY_ID);
 		entry.setDutyId(DUTY_ID);
 		entry.setBooking(booking);
 		entry.setStatus(status);

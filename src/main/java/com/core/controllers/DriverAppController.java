@@ -7,6 +7,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
@@ -15,6 +16,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 
 import com.core.dtos.driverduty.DriverAppDutyTokenResponse;
+import com.core.dtos.driverduty.DriverDutyAcceptanceResponse;
+import com.core.dtos.driverduty.DriverDutyDeclineRequest;
+import com.core.dtos.driverduty.DriverDutyDeclineResponse;
 import com.core.dtos.driverduty.DutySummaryForDriverDTO;
 import com.core.dtos.driverduty.VehicleInspectionRequest;
 import com.core.dtos.driverduty.VehicleInspectionResponse;
@@ -58,6 +62,19 @@ public class DriverAppController {
 	@PostMapping("/duties/{dutyId}/token")
 	public DriverAppDutyTokenResponse issueExecutionToken(@PathVariable String dutyId) {
 		return driverAppService.issueExecutionToken(security.orgId(), security.userId(), dutyId);
+	}
+
+	@PostMapping("/duties/{dutyId}/accept")
+	public DriverDutyAcceptanceResponse acceptDuty(@PathVariable String dutyId) {
+		return driverAppService.acceptDuty(security.orgId(), security.userId(), dutyId);
+	}
+
+	@PostMapping("/duties/{dutyId}/decline")
+	public DriverDutyDeclineResponse declineDuty(
+			@PathVariable String dutyId,
+			@RequestBody DriverDutyDeclineRequest payload
+	) {
+		return driverAppService.declineDuty(security.orgId(), security.userId(), dutyId, payload);
 	}
 
 	@PostMapping(

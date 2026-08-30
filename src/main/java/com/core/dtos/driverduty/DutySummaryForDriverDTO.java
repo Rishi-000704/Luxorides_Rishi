@@ -32,6 +32,12 @@ public record DutySummaryForDriverDTO(
 		Instant startAt,
 		Instant endAt,
 
-		Money dutyTotal
+		Money dutyTotal,
+
+		Instant driverAcceptedAt,
+		Instant driverDeclinedAt,
+		Instant pickupOtpVerifiedAt,
+		Instant garageReturnConfirmedAt,
+		Instant dutyClosedAt
 ) {
 }
