@@ -70,10 +70,11 @@ class AuthenticationServiceDriverTest {
 		smsService = mock(SMSService.class);
 		FileService fileService = mock(FileService.class);
 		otpRecordWriter = mock(OtpRecordWriter.class);
+		FileAccessTokenService fileAccessTokenService = mock(FileAccessTokenService.class);
 
 		service = new AuthenticationService(userRepository, clientRepository, employeeRepository, driverRepository,
 				passwordEncoder, jwtService, authenticationManager, userOtpRepository, smsService, fileService,
-				otpRecordWriter);
+				otpRecordWriter, fileAccessTokenService);
 	}
 
 	@Test
@@ -108,10 +109,12 @@ class AuthenticationServiceDriverTest {
 	 * (e.g. a double-tapped "Send OTP") already deleted that row. The write now goes
 	 * through OtpRecordWriter.replace() (a bulk deleteByPhone() + save() in its own
 	 * REQUIRES_NEW transaction) -- AuthenticationService itself must never touch
-	 * userOtpRepository's delete/find directly for the issuance path.
+	 * userOtpRepository's delete() directly for the issuance path. findByPhone() IS now
+	 * called (P1.8 cooldown check, see below) but it's read-only and never followed by an
+	 * entity-based delete, so it doesn't reintroduce the staleness race this test guards.
 	 */
 	@Test
-	void generateDriverOtp_clearsAnyPriorOtpAtomically_notFindThenDelete() {
+	void generateDriverOtp_clearsAnyPriorOtpAtomically_neverEntityBasedDelete() {
 		Driver driver = new Driver();
 		driver.setPhone(PHONE);
 		driver.setOrgId(ORG_ID);
@@ -123,8 +126,52 @@ class AuthenticationServiceDriverTest {
 
 		verify(otpRecordWriter, times(1)).replace(argThat(record -> PHONE.equals(record.getPhone())));
 		verify(userOtpRepository, never()).deleteByPhone(anyString());
-		verify(userOtpRepository, never()).findByPhone(PHONE);
 		verify(userOtpRepository, never()).delete(any());
+	}
+
+	/*
+	 * P1.8 -- issueOtp previously had no throttle at all: hammering
+	 * generate-otp with the same phone sent one real SMS per call. Now a
+	 * prior OTP record less than OTP_RESEND_COOLDOWN_SECONDS old blocks a
+	 * new send before any OTP is generated or written.
+	 */
+	@Test
+	void generateDriverOtp_rejectsResend_withinCooldownWindow() {
+		Driver driver = new Driver();
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+
+		UserOtp recent = new UserOtp();
+		recent.setPhone(PHONE);
+		recent.setCreatedAt(Instant.now().minusSeconds(5));
+		when(userOtpRepository.findByPhone(PHONE)).thenReturn(recent);
+
+		assertThrows(BusinessException.class,
+				() -> service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID)));
+
+		verify(smsService, never()).sendOtp(anyString(), anyString(), anyString(), anyString());
+		verify(otpRecordWriter, never()).replace(any());
+	}
+
+	@Test
+	void generateDriverOtp_allowsResend_onceCooldownHasPassed() {
+		Driver driver = new Driver();
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+		when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+		when(smsService.sendOtp(eq(ORG_ID), eq(PHONE), anyString(), anyString())).thenReturn(true);
+
+		UserOtp old = new UserOtp();
+		old.setPhone(PHONE);
+		old.setCreatedAt(Instant.now().minusSeconds(45));
+		when(userOtpRepository.findByPhone(PHONE)).thenReturn(old);
+
+		var response = service.generateDriverOtp(new DriverOtpRequest(PHONE, ORG_ID));
+
+		assertEquals(true, response.success());
+		verify(smsService, times(1)).sendOtp(eq(ORG_ID), eq(PHONE), anyString(), anyString());
 	}
 
 	/*

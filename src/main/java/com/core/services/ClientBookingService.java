@@ -206,9 +206,17 @@ public class ClientBookingService {
 		return new TripRatingResponse(saved.getDutyId(), saved.getStars(), saved.getComment(), saved.getCreatedAt());
 	}
 
+	/*
+	 * P1.8 -- previously scoped only by orgId, so any authenticated client in
+	 * the same org could read another client's trip rating (stars + comment)
+	 * by guessing/knowing a dutyId -- submitRating already checks clientId
+	 * ownership (see above), this read path just hadn't. TripRating carries
+	 * its own clientId, so no extra lookup is needed to enforce it here.
+	 */
 	@Transactional(readOnly = true)
-	public Optional<TripRatingResponse> getRating(String dutyId, String orgId) {
+	public Optional<TripRatingResponse> getRating(String dutyId, String clientId, String orgId) {
 		return tripRatingRepository.findByDutyIdAndOrgId(dutyId, orgId)
+				.filter(r -> clientId.equals(r.getClientId()))
 				.map(r -> new TripRatingResponse(r.getDutyId(), r.getStars(), r.getComment(), r.getCreatedAt()));
 	}
 

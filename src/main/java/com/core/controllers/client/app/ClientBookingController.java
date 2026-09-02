@@ -123,7 +123,8 @@ public class ClientBookingController {
 	@GetMapping("/duty/{dutyId}/rating")
 	@PreAuthorize("isAuthenticated()")
 	public ResponseEntity<TripRatingResponse> getRating(@PathVariable String dutyId) {
-		return clientBookingService.getRating(dutyId, security.orgId())
+		Client client = clientService.findByUserId(security.userId());
+		return clientBookingService.getRating(dutyId, client.getId(), security.orgId())
 				.map(ResponseEntity::ok)
 				.orElseGet(() -> ResponseEntity.noContent().build());
 	}

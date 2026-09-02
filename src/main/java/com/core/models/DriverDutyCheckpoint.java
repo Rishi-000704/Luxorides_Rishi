@@ -30,8 +30,18 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
+/*
+ * P1.8 -- idx_driver_checkpoint_driver_type added for
+ * findLatestByDriverIdsAndCheckpointType (DriverDutyCheckpointRepository),
+ * which filters driver_id IN (...) AND checkpoint_type = ... in both its
+ * outer query and its correlated MAX(submitted_at) subquery -- called on
+ * every DispatchSuggestionService dispatch-board load with no supporting
+ * index on driver_id at all before this. Column order matches the query's
+ * own equality predicates first, submitted_at last for the MAX() subquery.
+ */
 @Table(name = "driver_duty_checkpoint", indexes = { @Index(name = "idx_driver_checkpoint_duty", columnList = "duty_id"),
-		@Index(name = "idx_driver_checkpoint_entry_type", columnList = "booking_entry_id, checkpoint_type") })
+		@Index(name = "idx_driver_checkpoint_entry_type", columnList = "booking_entry_id, checkpoint_type"),
+		@Index(name = "idx_driver_checkpoint_driver_type", columnList = "driver_id, checkpoint_type, submitted_at") })
 public class DriverDutyCheckpoint extends AuditableEntity {
 
 	@Id

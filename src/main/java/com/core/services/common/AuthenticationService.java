@@ -5,6 +5,8 @@ import java.security.SecureRandom;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -51,6 +53,7 @@ import com.core.repositories.UserOtpRepository;
 import com.core.repositories.UserRepository;
 import com.core.services.JwtService;
 import com.core.util.AddressUtil;
+import com.core.util.PhoneNumberNormalizer;
 import com.core.dtos.config.EmployeeListItem;
 
 @Slf4j
@@ -72,6 +75,18 @@ public class AuthenticationService {
 
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 	private static final int OTP_WRITE_MAX_ATTEMPTS = 3;
+
+	/*
+	 * P1.8 -- neither /auth/client/generate-otp nor /auth/driver/generate-otp
+	 * had any throttle: issueOtp unconditionally sent a fresh SMS on every
+	 * call, so hammering either endpoint with the same phone number triggered
+	 * unlimited real OTP SMS sends (cost abuse / SMS-bombing risk against any
+	 * phone number, since the client-side flow requires no pre-existing
+	 * account). This is a minimum interval between two OTPs for the same
+	 * phone, not a request-count limiter -- narrow and self-contained, unlike
+	 * app-wide rate limiting, which is a larger, separately-scoped concern.
+	 */
+	private static final long OTP_RESEND_COOLDOWN_SECONDS = 30;
 
 	public AuthenticationService(UserRepository userRepository, ClientRepository clientRepository,
 			EmployeeRepository employeeRepository, DriverRepository driverRepository,
@@ -127,6 +142,8 @@ public class AuthenticationService {
 	 * of re-implemented per account type.
 	 */
 	private String issueOtp(String orgId, String mobileNumber) {
+		enforceOtpResendCooldown(mobileNumber);
+
 		String otp = generate6DigitOtp();
 		UserOtp record = new UserOtp();
 		record.setPhone(mobileNumber);
@@ -148,6 +165,33 @@ public class AuthenticationService {
 		}
 
 		return otp;
+	}
+
+	/*
+	 * Read-only lookup, not followed by any entity-based delete -- distinct
+	 * from the find-then-delete(entity) race that OtpRecordWriter.replace()
+	 * (a bulk deleteByPhone() + save()) already exists to avoid. A prior OTP
+	 * record still within the cooldown window is left untouched here; the
+	 * normal issuance flow below still clears and replaces it atomically once
+	 * the cooldown has passed.
+	 */
+	private void enforceOtpResendCooldown(String mobileNumber) {
+		String normalizedPhone = PhoneNumberNormalizer.normalize(mobileNumber);
+		UserOtp existing = this.userOtpRepository.findByPhone(normalizedPhone);
+
+		if (existing == null || existing.getCreatedAt() == null) {
+			return;
+		}
+
+		long secondsSinceIssue = Duration.between(existing.getCreatedAt(), Instant.now()).getSeconds();
+
+		if (secondsSinceIssue < OTP_RESEND_COOLDOWN_SECONDS) {
+			long secondsRemaining = OTP_RESEND_COOLDOWN_SECONDS - secondsSinceIssue;
+			throw new BusinessException(
+					ErrorCode.OTP_COOLDOWN_ACTIVE,
+					"Please wait " + secondsRemaining + " seconds before requesting another OTP."
+			);
+		}
 	}
 
 	/*

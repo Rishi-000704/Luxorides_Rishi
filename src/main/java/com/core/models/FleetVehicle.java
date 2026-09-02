@@ -16,18 +16,32 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * P1.8 -- idx_fleet_vehicle_org added: this entity had no indexes at all,
+ * despite every org-scoped query against it (findByOrgId, findByOrgIdAndIdIn,
+ * findByOrgIdFetchMasterVehicle) doing a full table scan. Those queries feed
+ * DispatchSuggestionService's per-duty vehicle context, VehicleMaintenanceService's
+ * prediction pass, and FleetAnalyticsService's utilization report -- all hot,
+ * frequently-called read paths. No `name` on @Table -- keeps whatever table
+ * name Hibernate's default naming strategy was already deriving; only adds
+ * an index definition. Plain (non-unique) index -- safe to add regardless of
+ * existing data, unlike a uniqueness constraint.
+ */
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+@Table(indexes = { @Index(name = "idx_fleet_vehicle_org", columnList = "org_id") })
 public class FleetVehicle extends AuditableEntity {
 	@Id
 	@GeneratedValue(strategy = GenerationType.UUID)
