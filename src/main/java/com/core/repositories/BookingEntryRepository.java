@@ -446,6 +446,52 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 			@Param("orgId") String orgId, @Param("fleetVehicleIds") java.util.Collection<String> fleetVehicleIds);
 
 	/*
+	 * P1.5 -- batch equivalent of existsByDriverIdAndStatusIn /
+	 * existsByFleetVehicleIdAndStatusIn, used by DispatchSuggestionService to
+	 * find every busy candidate in one query instead of one exists() call per
+	 * candidate. Same statuses, same underlying table -- driverId/vehicleId
+	 * membership in the returned set is exactly equivalent to the old
+	 * per-candidate exists() boolean.
+	 */
+	@Query("""
+		SELECT DISTINCT e.driverId
+		FROM BookingEntry e
+		WHERE e.driverId IN :driverIds
+		  AND e.status IN :statuses
+	""")
+	List<String> findBusyDriverIds(
+			@Param("driverIds") java.util.Collection<String> driverIds, @Param("statuses") List<DutyStatus> statuses);
+
+	@Query("""
+		SELECT DISTINCT e.fleetVehicleId
+		FROM BookingEntry e
+		WHERE e.fleetVehicleId IN :fleetVehicleIds
+		  AND e.status IN :statuses
+	""")
+	List<String> findBusyFleetVehicleIds(
+			@Param("fleetVehicleIds") java.util.Collection<String> fleetVehicleIds, @Param("statuses") List<DutyStatus> statuses);
+
+	/*
+	 * P1.5 -- batch equivalent of findFirstByFleetVehicleIdAndStatusOrderByEndAtDesc,
+	 * used by DispatchSuggestionService.scoreVehicle, which previously called
+	 * that single-vehicle method once per candidate vehicle. A vehicle with no
+	 * completed duties is simply absent from the result -- callers must treat
+	 * that the same as the single-vehicle method's Optional.empty(). The
+	 * IS NOT NULL filter mirrors ORDER BY ... DESC's own preference for a
+	 * non-null endAt (MariaDB sorts NULL as the lowest value, so DESC already
+	 * put a null last behind any real endAt).
+	 */
+	@Query("""
+		SELECT e.fleetVehicleId, MAX(e.endAt)
+		FROM BookingEntry e
+		WHERE e.fleetVehicleId IN :fleetVehicleIds
+		  AND e.status = com.core.models.enums.DutyStatus.COMPLETED
+		  AND e.endAt IS NOT NULL
+		GROUP BY e.fleetVehicleId
+	""")
+	List<Object[]> findLastCompletedEndAtForVehicles(@Param("fleetVehicleIds") java.util.Collection<String> fleetVehicleIds);
+
+	/*
 	 * Real historical completed-trip data for FareRecommendationService --
 	 * distance-proximity filtering happens in Java (see that service) since
 	 * it needs closingKM-startingKM, which JPQL can compute but bucketing

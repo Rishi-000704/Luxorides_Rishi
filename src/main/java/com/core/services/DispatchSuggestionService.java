@@ -3,9 +3,13 @@ package com.core.services;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +44,19 @@ import lombok.RequiredArgsConstructor;
  * to honestly back one) -- reported as such, not oversold. Never
  * auto-assigns anything: this only ranks candidates for a dispatcher to
  * review and explicitly pick in the existing manual allot-duty flow.
+ *
+ * P1.5 -- scoring formula, weights, ranking, and eligibility rules below are
+ * byte-for-byte unchanged from before this checkpoint. What changed is how
+ * the inputs to that formula are fetched: driver/vehicle attributes that
+ * don't depend on which duty is being scored (completed-duty counts, rating
+ * averages, last-known GPS position, vehicle idle time) are now fetched once
+ * per suggest()/suggestForAllPendingDuties() call instead of once per
+ * candidate, and -- for suggestForAllPendingDuties -- once for the whole
+ * pending-duty batch instead of once per duty. Busy-driver/vehicle state is
+ * the one genuinely time-sensitive input, so it stays a fresh batch query
+ * per duty (still one query instead of one-per-candidate) rather than being
+ * folded into the shared, cross-duty context -- see buildDriverContext /
+ * buildVehicleContext vs. busyDriverIds / busyVehicleIds below.
  */
 @Service
 @RequiredArgsConstructor
@@ -48,6 +65,7 @@ public class DispatchSuggestionService {
 	private static final int TOP_N = 5;
 	private static final double UNKNOWN_DISTANCE_SCORE = 50.0;
 	private static final double UNKNOWN_RATING_SCORE = 25.0;
+	private static final List<DutyStatus> BUSY_STATUSES = List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING);
 
 	private final BookingEntryRepository bookingEntryRepository;
 	private final DriverRepository driverRepository;
@@ -62,23 +80,10 @@ public class DispatchSuggestionService {
 
 		AddressSnapshot pickup = entry.getReportingLocation();
 
-		List<DispatchDriverSuggestion> drivers = driverRepository.findByOrgId(orgId).stream()
-				.filter(driver -> !bookingEntryRepository.existsByDriverIdAndStatusIn(
-						driver.getId(), List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING)))
-				.map(driver -> scoreDriver(driver, orgId, pickup))
-				.sorted(Comparator.comparingDouble(DispatchDriverSuggestion::score).reversed())
-				.limit(TOP_N)
-				.toList();
+		DriverContext driverContext = buildDriverContext(orgId);
+		VehicleContext vehicleContext = buildVehicleContext(orgId);
 
-		List<DispatchVehicleSuggestion> vehicles = fleetVehicleRepository.findByOrgId(orgId).stream()
-				.filter(vehicle -> !bookingEntryRepository.existsByFleetVehicleIdAndStatusIn(
-						vehicle.getId(), List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING)))
-				.map(this::scoreVehicle)
-				.sorted(Comparator.comparingDouble(DispatchVehicleSuggestion::score).reversed())
-				.limit(TOP_N)
-				.toList();
-
-		return new DispatchSuggestionResponse(drivers, vehicles);
+		return suggestForDuty(pickup, driverContext, vehicleContext);
 	}
 
 	/*
@@ -90,32 +95,118 @@ public class DispatchSuggestionService {
 	 * so the real, honest scope is jointly ranking candidates across all
 	 * pending duties so a dispatcher can see the whole board at once, rather
 	 * than one duty in isolation.
+	 *
+	 * P1.5 -- driverContext/vehicleContext (completed-duty counts, ratings,
+	 * last-known position, vehicle idle time) are built exactly once here and
+	 * reused for every pending duty below, instead of each suggest() call
+	 * rebuilding them from scratch. This is what eliminates the O(pending
+	 * duties x drivers) repeated-aggregate problem identified during the
+	 * P1.4 audit.
 	 */
 	@Transactional(readOnly = true)
 	public Map<String, DispatchSuggestionResponse> suggestForAllPendingDuties(String orgId) {
-		Map<String, DispatchSuggestionResponse> result = new LinkedHashMap<>();
+		List<BookingEntry> pendingDuties = bookingEntryRepository.findRequestedDutiesForDispatch(orgId);
 
-		for (BookingEntry entry : bookingEntryRepository.findRequestedDutiesForDispatch(orgId)) {
-			result.put(entry.getDutyId(), suggest(entry.getDutyId(), orgId));
+		DriverContext driverContext = buildDriverContext(orgId);
+		VehicleContext vehicleContext = buildVehicleContext(orgId);
+
+		Map<String, DispatchSuggestionResponse> result = new LinkedHashMap<>();
+		for (BookingEntry entry : pendingDuties) {
+			result.put(entry.getDutyId(), suggestForDuty(entry.getReportingLocation(), driverContext, vehicleContext));
 		}
 
 		return result;
 	}
 
-	private DispatchDriverSuggestion scoreDriver(Driver driver, String orgId, AddressSnapshot pickup) {
-		Double distanceKm = checkpointRepository
-				.findFirstByDriverIdAndCheckpointTypeOrderBySubmittedAtDesc(driver.getId(), DriverDutyCheckpointType.END)
-				.map(DriverDutyCheckpoint::getLocation)
-				.map(loc -> lastKnownDistanceKm(loc, pickup))
-				.orElse(null);
+	private DispatchSuggestionResponse suggestForDuty(
+			AddressSnapshot pickup, DriverContext driverContext, VehicleContext vehicleContext) {
 
-		long completedDuties = bookingEntryRepository.aggregateDriverCompletedDuties(orgId, null, null).stream()
-				.filter(row -> driver.getId().equals(row[0]))
-				.map(row -> ((Number) row[1]).longValue())
-				.findFirst()
-				.orElse(0L);
+		Set<String> busyDriverIds = driverContext.driverIds().isEmpty()
+				? Set.of()
+				: new HashSet<>(bookingEntryRepository.findBusyDriverIds(driverContext.driverIds(), BUSY_STATUSES));
 
-		Double ratingAverage = tripRatingRepository.findAverageStarsByDriverIdAndOrgId(driver.getId(), orgId);
+		List<DispatchDriverSuggestion> drivers = driverContext.drivers().stream()
+				.filter(driver -> !busyDriverIds.contains(driver.getId()))
+				.map(driver -> scoreDriver(driver, pickup, driverContext))
+				.sorted(Comparator.comparingDouble(DispatchDriverSuggestion::score).reversed())
+				.limit(TOP_N)
+				.toList();
+
+		Set<String> busyVehicleIds = vehicleContext.vehicleIds().isEmpty()
+				? Set.of()
+				: new HashSet<>(bookingEntryRepository.findBusyFleetVehicleIds(vehicleContext.vehicleIds(), BUSY_STATUSES));
+
+		List<DispatchVehicleSuggestion> vehicles = vehicleContext.vehicles().stream()
+				.filter(vehicle -> !busyVehicleIds.contains(vehicle.getId()))
+				.map(vehicle -> scoreVehicle(vehicle, vehicleContext))
+				.sorted(Comparator.comparingDouble(DispatchVehicleSuggestion::score).reversed())
+				.limit(TOP_N)
+				.toList();
+
+		return new DispatchSuggestionResponse(drivers, vehicles);
+	}
+
+	/*
+	 * P1.5 -- previously: aggregateDriverCompletedDuties(orgId, null, null),
+	 * a full org-wide GROUP BY, was re-run inside scoreDriver for every single
+	 * candidate driver (and, via suggestForAllPendingDuties, again for every
+	 * pending duty on top of that). Now run exactly once per top-level call.
+	 * Same for the per-driver rating average and last-known-position lookups,
+	 * previously one query per driver.
+	 */
+	private DriverContext buildDriverContext(String orgId) {
+		List<Driver> drivers = driverRepository.findByOrgId(orgId);
+		List<String> driverIds = drivers.stream().map(Driver::getId).toList();
+
+		Map<String, Long> completedDutiesByDriverId = driverIds.isEmpty()
+				? Map.of()
+				: bookingEntryRepository.aggregateDriverCompletedDuties(orgId, null, null).stream()
+						.collect(Collectors.toMap(row -> (String) row[0], row -> ((Number) row[1]).longValue()));
+
+		Map<String, Double> ratingAverageByDriverId = driverIds.isEmpty()
+				? Map.of()
+				: tripRatingRepository.aggregateStarsByDriverIds(orgId, driverIds).stream()
+						.collect(Collectors.toMap(row -> (String) row[0], row -> (Double) row[1]));
+
+		Map<String, DriverDutyCheckpoint> lastCheckpointByDriverId = driverIds.isEmpty()
+				? Map.of()
+				: checkpointRepository.findLatestByDriverIdsAndCheckpointType(driverIds, DriverDutyCheckpointType.END).stream()
+						.collect(Collectors.toMap(DriverDutyCheckpoint::getDriverId, Function.identity()));
+
+		return new DriverContext(drivers, driverIds, completedDutiesByDriverId, ratingAverageByDriverId, lastCheckpointByDriverId);
+	}
+
+	/*
+	 * P1.5 -- previously findByOrgId (no masterVehicle fetch), so every
+	 * candidate vehicle's scoreVehicle() call triggered its own lazy load of
+	 * masterVehicle for the vehicleName field -- an undocumented N+1 found
+	 * while tracing this class for this checkpoint. findByOrgIdFetchMasterVehicle
+	 * (added in P1.4 for VehicleMaintenanceService) has the exact same
+	 * fv.orgId = :orgId scope, just with masterVehicle JOIN FETCHed, so it's a
+	 * safe drop-in here without touching the plain findByOrgId that
+	 * FleetVehicleDataExchangeHandler still uses unchanged. lastCompletedEndAt
+	 * (idle time) is also now one batch query instead of one per vehicle.
+	 */
+	private VehicleContext buildVehicleContext(String orgId) {
+		List<FleetVehicle> vehicles = fleetVehicleRepository.findByOrgIdFetchMasterVehicle(orgId);
+		List<String> vehicleIds = vehicles.stream().map(FleetVehicle::getId).toList();
+
+		Map<String, Instant> lastCompletedEndAtByVehicleId = vehicleIds.isEmpty()
+				? Map.of()
+				: bookingEntryRepository.findLastCompletedEndAtForVehicles(vehicleIds).stream()
+						.collect(Collectors.toMap(row -> (String) row[0], row -> (Instant) row[1]));
+
+		return new VehicleContext(vehicles, vehicleIds, lastCompletedEndAtByVehicleId);
+	}
+
+	private DispatchDriverSuggestion scoreDriver(Driver driver, AddressSnapshot pickup, DriverContext context) {
+		DriverDutyCheckpoint lastCheckpoint = context.lastCheckpointByDriverId().get(driver.getId());
+		Double distanceKm = lastCheckpoint != null && lastCheckpoint.getLocation() != null
+				? lastKnownDistanceKm(lastCheckpoint.getLocation(), pickup)
+				: null;
+
+		long completedDuties = context.completedDutiesByDriverId().getOrDefault(driver.getId(), 0L);
+		Double ratingAverage = context.ratingAverageByDriverId().get(driver.getId());
 
 		double distanceScore = distanceKm != null ? Math.max(0, 100 - distanceKm) : UNKNOWN_DISTANCE_SCORE;
 		double experienceScore = Math.min(completedDuties, 50);
@@ -128,11 +219,8 @@ public class DispatchSuggestionService {
 		return new DispatchDriverSuggestion(driver.getId(), driverName, distanceKm, completedDuties, ratingAverage, score);
 	}
 
-	private DispatchVehicleSuggestion scoreVehicle(FleetVehicle vehicle) {
-		Instant lastUsed = bookingEntryRepository
-				.findFirstByFleetVehicleIdAndStatusOrderByEndAtDesc(vehicle.getId(), DutyStatus.COMPLETED)
-				.map(BookingEntry::getEndAt)
-				.orElse(null);
+	private DispatchVehicleSuggestion scoreVehicle(FleetVehicle vehicle, VehicleContext context) {
+		Instant lastUsed = context.lastCompletedEndAtByVehicleId().get(vehicle.getId());
 
 		Double idleDays = lastUsed != null
 				? Duration.between(lastUsed, Instant.now()).toHours() / 24.0
@@ -155,5 +243,19 @@ public class DispatchSuggestionService {
 
 		EtaEstimator.Estimate estimate = EtaEstimator.estimate(to, from.getLatitude(), from.getLongitude(), null);
 		return estimate.distanceRemainingKm();
+	}
+
+	private record DriverContext(
+			List<Driver> drivers,
+			List<String> driverIds,
+			Map<String, Long> completedDutiesByDriverId,
+			Map<String, Double> ratingAverageByDriverId,
+			Map<String, DriverDutyCheckpoint> lastCheckpointByDriverId) {
+	}
+
+	private record VehicleContext(
+			List<FleetVehicle> vehicles,
+			List<String> vehicleIds,
+			Map<String, Instant> lastCompletedEndAtByVehicleId) {
 	}
 }
