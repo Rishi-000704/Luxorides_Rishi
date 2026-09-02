@@ -152,7 +152,7 @@ public class ClientService {
 			if (client.getPic() != null) {
 				fileService.deleteFile(client.getPic());
 			}
-			client.setPic(fileService.saveFile(file));
+			client.setPic(fileService.saveDisplayImage(file));
 			return this.attachData(clientRepository.save(client));
 		} catch (Exception ex) {
 			ex.printStackTrace();

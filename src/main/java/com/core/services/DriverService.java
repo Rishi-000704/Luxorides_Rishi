@@ -114,7 +114,7 @@ public class DriverService {
 			if (driver.getPic() != null) {
 				this.fileService.deleteFile(driver.getPic());
 			}
-			driver.setPic(this.fileService.saveFile(file));
+			driver.setPic(this.fileService.saveDisplayImage(file));
 			return this.attachData(this.driverRepository.save(driver));
 		} catch (Exception e) {
 			e.printStackTrace();

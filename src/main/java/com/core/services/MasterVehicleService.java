@@ -119,7 +119,7 @@ public class MasterVehicleService {
 			if (vehicle.getPic() != null) {
 				this.fileService.deleteFile(vehicle.getPic());
 			}
-			vehicle.setPic(this.fileService.saveFile(file));
+			vehicle.setPic(this.fileService.saveDisplayImage(file));
 			return assembler.assemble(this.masterVehicleRepository.save(vehicle));
 	}
 

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.core.dtos.driverduty.DocumentUploadRequest;
 import com.core.dtos.driverduty.DriverDocumentResponse;
 import com.core.security.SecurityContextUtil;
 import com.core.services.DriverDocumentService;
@@ -43,8 +44,12 @@ public class DriverDocumentController {
 	)
 	public DriverDocumentResponse uploadDocument(
 			@PathVariable String documentType,
-			@RequestPart("file") MultipartFile file
+			@RequestPart("file") MultipartFile file,
+			@RequestPart(value = "payload", required = false) DocumentUploadRequest payload
 	) throws IOException {
-		return driverDocumentService.uploadDocument(security.orgId(), security.userId(), documentType, file);
+		return driverDocumentService.uploadDocument(
+				security.orgId(), security.userId(), documentType, file,
+				payload != null ? payload.expiryDate() : null
+		);
 	}
 }

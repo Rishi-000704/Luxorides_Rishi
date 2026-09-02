@@ -442,7 +442,7 @@ public class AuthenticationService {
 		if (emp.getPic() != null) {
 			this.fileService.deleteFile(emp.getPic());
 		}
-		emp.setPic(this.fileService.saveFile(file));
+		emp.setPic(this.fileService.saveDisplayImage(file));
 		return this.employeeRepository.save(emp);
 	}
 
