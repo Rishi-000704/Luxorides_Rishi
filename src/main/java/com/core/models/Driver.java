@@ -19,17 +19,45 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * P1.1 -- indexes added against verified repository query evidence. See
+ * DriverRepository / actual callers:
+ *   idx_driver_user       : findByUserId -- resolves the authenticated
+ *                           driver on essentially every driver-app request
+ *                           (DriverDocumentService, DriverAppService,
+ *                           VehicleInspectionService, AuthenticationService,
+ *                           AuditActorService). The single hottest Driver
+ *                           query found in this audit.
+ *   idx_driver_org_phone  : findByPhoneAndOrgId (login/OTP flow in
+ *                           AuthenticationService, duplicate-phone check in
+ *                           DriverService) AND findByOrgId/getPage (ops
+ *                           driver directory) as an org_id-prefix scan --
+ *                           one composite covers both instead of two
+ *                           separate indexes.
+ * findByIdAndOrgId is not indexed separately: id is already the primary key,
+ * so org_id is just an in-memory filter on the single row the PK lookup
+ * already found -- a second index would be redundant.
+ * findByClientIdAndOrgId (corporate-owned driver listing) was evidenced but
+ * deferred -- see final report: real but occasional admin-screen usage, not
+ * a per-request hot path like the two above.
+ */
 @Entity
+@Table(name = "driver", indexes = {
+		@Index(name = "idx_driver_user", columnList = "user_id"),
+		@Index(name = "idx_driver_org_phone", columnList = "org_id, phone")
+})
 @Getter
 @Setter
 @NoArgsConstructor

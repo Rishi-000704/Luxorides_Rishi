@@ -20,15 +20,40 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * P1.1 -- indexes added against verified repository query evidence, not
+ * guessed. See BookingRepository:
+ *   idx_booking_org_bookingid : findByBookingIdAndOrgId / lockByBookingIdAndOrgId
+ *                               (18 call sites across payment, invoice, refund,
+ *                               driver-duty and notification code -- the single
+ *                               hottest Booking lookup in the codebase).
+ *   idx_booking_org_client    : findByClientIdAndOrgId (customer app's "My
+ *                               Bookings" list, BookingService.getClientBookings).
+ *   idx_booking_org_status    : searchBookingsByStatus /
+ *                               searchBookingsOrderByFirstDutyReportingTimeAsc/Desc
+ *                               (ops app booking board) and the fraud-signal
+ *                               repeated-cancellations query. org_id leads in
+ *                               all three because every query here always
+ *                               scopes by org first, matching this codebase's
+ *                               existing composite-index convention (see
+ *                               ReportRequest/PurchaseInvoice).
+ */
 @Entity
+@Table(name = "booking", indexes = {
+		@Index(name = "idx_booking_org_bookingid", columnList = "org_id, booking_id"),
+		@Index(name = "idx_booking_org_client", columnList = "org_id, client_id"),
+		@Index(name = "idx_booking_org_status", columnList = "org_id, status")
+})
 @Getter
 @Setter
 @NoArgsConstructor

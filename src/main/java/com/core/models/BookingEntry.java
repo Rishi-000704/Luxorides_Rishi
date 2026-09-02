@@ -23,15 +23,45 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * P1.1 -- indexes added against verified repository query evidence. See
+ * BookingEntryRepository:
+ *   idx_booking_entry_duty          : findByDutyId / findByDutyIdAndOrgId /
+ *                                     lockByDutyIdAndOrgId /
+ *                                     findForDriverDutySubmissionView /
+ *                                     findForDriverSelf (5 methods keyed on
+ *                                     duty_id). BookingEntry has no own org_id
+ *                                     column -- org scoping happens through the
+ *                                     joined Booking row, which is already
+ *                                     reached via its own primary key.
+ *   idx_booking_entry_driver_status : findActiveDutiesForDriver /
+ *                                     findCompletedDutiesForDriver (driver
+ *                                     app's own duty-list screens) /
+ *                                     existsByDriverIdAndStatusIn (allotment
+ *                                     eligibility check).
+ *   idx_booking_entry_vehicle_status: existsByFleetVehicleIdAndStatusIn /
+ *                                     findFirstByFleetVehicleIdAndStatusOrderByEndAtDesc
+ *                                     -- the same allotment-eligibility shape,
+ *                                     for vehicles instead of drivers.
+ * Deliberately NOT indexed here: masterVehicleId, supplierId (no repository
+ * query filters on them directly against BookingEntry -- see final report).
+ */
 @Entity
+@Table(name = "booking_entry", indexes = {
+		@Index(name = "idx_booking_entry_duty", columnList = "duty_id"),
+		@Index(name = "idx_booking_entry_driver_status", columnList = "driver_id, status"),
+		@Index(name = "idx_booking_entry_vehicle_status", columnList = "fleet_vehicle_id, status")
+})
 @Getter
 @Setter
 @NoArgsConstructor

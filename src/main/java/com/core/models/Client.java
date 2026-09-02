@@ -17,16 +17,46 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * P1.1 -- indexes added against verified repository query evidence. See
+ * ClientRepository / actual callers:
+ *   idx_client_user         : findByUserId -- resolves the authenticated
+ *                             client on nearly every customer-app request
+ *                             (ClientBookingController, ProfileController,
+ *                             PassengerController, NotificationController,
+ *                             SupportTicketController, BillingEntityController,
+ *                             VehicleCatalogController -- dozens of call
+ *                             sites). The single hottest query in this whole
+ *                             audit.
+ *   idx_client_phone_org    : findByPhoneAndOrgId (login/OTP flow, duplicate
+ *                             check in ClientService). phone leads here
+ *                             (not org_id) because org-alone lookups are
+ *                             already covered by idx_client_org_supplier
+ *                             below, freeing this index to be ordered for
+ *                             the login lookup's own best selectivity.
+ *   idx_client_org_supplier : findByOrgId / getPage / findClientsByOrgId
+ *                             (org_id prefix -- the ops app client list) and
+ *                             findByOrgIdAndSupplierTrue (full composite --
+ *                             the dedicated vendor/supplier picker).
+ * findByIdAndOrgId is not indexed separately: id is already the primary key.
+ */
 @Entity
+@Table(name = "client", indexes = {
+		@Index(name = "idx_client_user", columnList = "user_id"),
+		@Index(name = "idx_client_phone_org", columnList = "phone, org_id"),
+		@Index(name = "idx_client_org_supplier", columnList = "org_id, supplier")
+})
 @Getter
 @Setter
 @AllArgsConstructor

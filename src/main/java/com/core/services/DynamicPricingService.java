@@ -44,7 +44,7 @@ public class DynamicPricingService {
 		Org org = orgService.getOrg(orgId);
 
 		long pendingDuties = bookingEntryRepository.countByOrgIdAndStatusIn(orgId, PENDING_STATUSES);
-		long totalDrivers = driverRepository.findByOrgId(orgId).size();
+		long totalDrivers = driverRepository.countByOrgId(orgId);
 		long busyDrivers = bookingEntryRepository.countDistinctBusyDrivers(orgId, BUSY_STATUSES);
 		long idleDrivers = Math.max(0, totalDrivers - busyDrivers);
 

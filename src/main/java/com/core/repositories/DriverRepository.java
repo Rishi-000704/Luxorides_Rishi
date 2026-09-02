@@ -13,7 +13,7 @@ import org.springframework.stereotype.Repository;
 import com.core.models.Driver;
 @Repository
 public interface DriverRepository extends JpaRepository<Driver, String> {
-	
+
 	Optional<Driver> findByIdAndOrgId(String id, String orgId);
 
 	Driver findByPhoneAndOrgId(String phone, String orgId);
@@ -21,6 +21,8 @@ public interface DriverRepository extends JpaRepository<Driver, String> {
 	Optional<Driver> findByUserId(String userId);
 
 	List<Driver> findByOrgId(String orgId);
+
+	long countByOrgId(String orgId);
 
 	List<Driver> findByClientIdAndOrgId(String clientId, String orgId);
 
