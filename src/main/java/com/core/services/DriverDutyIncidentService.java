@@ -32,6 +32,12 @@ public class DriverDutyIncidentService {
 
 	private static final long MAX_PHOTO_SIZE = 10L * 1024L * 1024L;
 
+	// A network retry resubmitting the exact same report within this window
+	// is treated as a duplicate, not a second incident -- a driver reporting
+	// two genuinely different things (even moments apart) will naturally
+	// have a different category or description, which still creates a new row.
+	private static final long DUPLICATE_WINDOW_SECONDS = 30;
+
 	private final DriverDutyTokenValidator tokenValidator;
 	private final DriverDutyIncidentReportRepository incidentReportRepository;
 	private final FileService fileService;
@@ -57,6 +63,13 @@ public class DriverDutyIncidentService {
 
 		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
+
+		Instant since = Instant.now().minusSeconds(DUPLICATE_WINDOW_SECONDS);
+		var recent = incidentReportRepository.findFirstByDutyIdAndCategoryAndDescriptionAndCreatedAtAfterOrderByCreatedAtDesc(
+				entry.getDutyId(), payload.category(), payload.description(), since);
+		if (recent.isPresent()) {
+			return new DriverDutyIncidentResponse(recent.get().getId(), true);
+		}
 
 		DriverDutyIncidentReport report = new DriverDutyIncidentReport();
 		report.setOrgId(accessToken.getOrgId());

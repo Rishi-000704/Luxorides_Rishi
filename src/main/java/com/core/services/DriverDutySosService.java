@@ -24,6 +24,13 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class DriverDutySosService {
 
+	// A genuine repeated SOS within this window is far more likely a
+	// double-tap or a client retry after a slow/uncertain response than a
+	// second real emergency -- returning the existing alert avoids flooding
+	// the (future) ops workflow with duplicates while still letting a driver
+	// who is still in danger send a fresh one moments later.
+	private static final long DUPLICATE_WINDOW_SECONDS = 30;
+
 	private final DriverDutyTokenValidator tokenValidator;
 	private final DriverDutySosAlertRepository sosAlertRepository;
 
@@ -36,6 +43,12 @@ public class DriverDutySosService {
 	) {
 		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
+
+		Instant since = Instant.now().minusSeconds(DUPLICATE_WINDOW_SECONDS);
+		var recent = sosAlertRepository.findFirstByDutyIdAndCreatedAtAfterOrderByCreatedAtDesc(entry.getDutyId(), since);
+		if (recent.isPresent()) {
+			return new DriverDutySosResponse(recent.get().getId(), true);
+		}
 
 		DriverDutySosAlert alert = new DriverDutySosAlert();
 		alert.setOrgId(accessToken.getOrgId());
