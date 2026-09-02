@@ -77,10 +77,18 @@ public class RefundRequestService {
 	 * The ONE place a real Razorpay refund call ever fires -- only reachable
 	 * through an employee explicitly hitting this endpoint (see
 	 * RefundController), never automatically.
+	 *
+	 * P1.7 -- lockByIdAndOrgId (not the plain findByIdAndOrgId this used to
+	 * call) serializes concurrent approve() calls for the same request id: a
+	 * second call blocks here until the first one's status update has
+	 * committed and released the lock, so its own PENDING_REVIEW check below
+	 * always sees the first call's outcome instead of racing it. Without
+	 * this, two concurrent approvals could both pass the status check and
+	 * both fire a real refund.
 	 */
 	@Transactional
 	public RefundRequest approve(String id, String orgId, String reviewedBy) {
-		RefundRequest request = refundRequestRepository.findByIdAndOrgId(id, orgId)
+		RefundRequest request = refundRequestRepository.lockByIdAndOrgId(id, orgId)
 				.orElseThrow(() -> new BusinessException(ErrorCode.REFUND_REQUEST_NOT_FOUND, "Refund request not found"));
 
 		if (request.getStatus() != RefundRequestStatus.PENDING_REVIEW) {
@@ -116,9 +124,10 @@ public class RefundRequestService {
 		}
 	}
 
+	/* P1.7 -- same lock as approve(), so a reject() racing an approve() (or another reject()) for the same id can't both act on a stale PENDING_REVIEW read. */
 	@Transactional
 	public RefundRequest reject(String id, String orgId, String reviewedBy, String reason) {
-		RefundRequest request = refundRequestRepository.findByIdAndOrgId(id, orgId)
+		RefundRequest request = refundRequestRepository.lockByIdAndOrgId(id, orgId)
 				.orElseThrow(() -> new BusinessException(ErrorCode.REFUND_REQUEST_NOT_FOUND, "Refund request not found"));
 
 		if (request.getStatus() != RefundRequestStatus.PENDING_REVIEW) {

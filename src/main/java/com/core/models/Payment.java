@@ -33,10 +33,22 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+/*
+ * P1.7 -- idx_payment_reconciliation added specifically for
+ * DutyPaymentReconciliationJob's fixedDelay=7000 query
+ * (findAllByCollectionContextAndStatusAndGatewayAndExpiresAtAfter), which
+ * runs forever and had no supporting index on any of its four filter
+ * columns. Column order matches the query's own equality predicates
+ * (collection_context, status, gateway) before its one range predicate
+ * (expires_at), the standard composite-index ordering for this shape of
+ * query. A plain (non-unique) index -- safe to add regardless of existing
+ * data, unlike a uniqueness constraint.
+ */
 @Table(name = "payment", indexes = {
 		@Index(name = "idx_payment_booking", columnList = "booking_id"),
 		@Index(name = "idx_payment_invoice", columnList = "invoice_id"),
-		@Index(name = "idx_payment_estimate", columnList = "estimate_id")
+		@Index(name = "idx_payment_estimate", columnList = "estimate_id"),
+		@Index(name = "idx_payment_reconciliation", columnList = "collection_context, status, gateway, expires_at")
 })
 public class Payment extends AuditableEntity {
 

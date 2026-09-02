@@ -2,16 +2,19 @@ package com.core.services;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,12 +23,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.core.events.BookingCancelledEvent;
 import com.core.events.BookingCompletedEvent;
 import com.core.events.DutyEntryCompletedEvent;
+import com.core.events.RefundInitiatedEvent;
 import com.core.events.assembler.BookingEventAssembler;
 import com.core.events.assembler.DutyEventAssembler;
 import com.core.events.assembler.PaymentEventAssembler;
 import com.core.events.assembler.RefundEventAssembler;
+import com.core.exception.BusinessException;
 import com.core.models.Booking;
 import com.core.models.BookingEntry;
 import com.core.models.embedded.GstSnapshot;
@@ -59,6 +65,8 @@ class BookingServiceTest {
 
 	private BookingRepository bookingRepository;
 	private ApplicationEventPublisher eventPublisher;
+	private BookingEventAssembler bookingEventAssembler;
+	private RefundEventAssembler refundEventAssembler;
 	private BookingService service;
 
 	@BeforeEach
@@ -68,10 +76,10 @@ class BookingServiceTest {
 		PackageRepository packageRepository = mock(PackageRepository.class);
 		DriverService driverService = mock(DriverService.class);
 		FleetVehicleService fleetVehicleService = mock(FleetVehicleService.class);
-		BookingEventAssembler bookingEventAssembler = mock(BookingEventAssembler.class);
+		bookingEventAssembler = mock(BookingEventAssembler.class);
 		DutyEventAssembler dutyEventAssembler = mock(DutyEventAssembler.class);
 		PaymentEventAssembler paymentEventAssembler = mock(PaymentEventAssembler.class);
-		RefundEventAssembler refundEventAssembler = mock(RefundEventAssembler.class);
+		refundEventAssembler = mock(RefundEventAssembler.class);
 		eventPublisher = mock(ApplicationEventPublisher.class);
 		BookingAssembler bookingAssembler = mock(BookingAssembler.class);
 		FileService fileService = mock(FileService.class);
@@ -181,6 +189,47 @@ class BookingServiceTest {
 		assertFalse(result == null);
 		verify(eventPublisher).publishEvent(isA(DutyEntryCompletedEvent.class));
 		verify(eventPublisher, never()).publishEvent(isA(BookingCompletedEvent.class));
+	}
+
+	/*
+	 * P1.7 -- cancelBooking previously had no guard against being called
+	 * again on an already-CANCELLED booking (unlike confirmBooking/
+	 * completeBookingInternal, which both use ensureBookingStatus). A
+	 * double-tap, lost-response retry, or a race between two concurrent
+	 * cancel requests for the same booking would re-run the cancellation
+	 * side effects, including publishing a second RefundInitiatedEvent --
+	 * and therefore creating a second RefundRequest -- for one real
+	 * cancellation.
+	 */
+	@Test
+	void cancelBooking_rejectsAnAlreadyCancelledBooking_doesNotPublishASecondRefundEvent() {
+		Booking booking = bookingWithOneEntry(BookingStatus.CANCELLED, DutyStatus.CONFIRMED);
+		when(bookingRepository.lockByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		assertThrows(BusinessException.class,
+				() -> service.cancelBooking(BOOKING_ID, ORG_ID, "duplicate cancel attempt", BigDecimal.ZERO));
+
+		verify(bookingRepository, never()).save(any(Booking.class));
+		verify(eventPublisher, never()).publishEvent(any());
+		verify(refundEventAssembler, never()).toRefundInitiatedEvent(any(), any());
+	}
+
+	@Test
+	void cancelBooking_confirmedBooking_cancelsAndPublishesExactlyOneRefundEvent() {
+		Booking booking = bookingWithOneEntry(BookingStatus.CONFIRMED, DutyStatus.CONFIRMED);
+		when(bookingRepository.lockByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+		when(bookingRepository.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
+		when(bookingEventAssembler.toBookingCancelledEvent(any(Booking.class), any()))
+				.thenReturn(mock(BookingCancelledEvent.class));
+		when(refundEventAssembler.toRefundInitiatedEvent(any(Booking.class), any(BigDecimal.class)))
+				.thenReturn(mock(RefundInitiatedEvent.class));
+
+		service.cancelBooking(BOOKING_ID, ORG_ID, "customer requested", BigDecimal.ZERO);
+
+		assertEquals(BookingStatus.CANCELLED, booking.getStatus());
+		verify(eventPublisher, times(1)).publishEvent(isA(BookingCancelledEvent.class));
+		verify(eventPublisher, times(1)).publishEvent(isA(RefundInitiatedEvent.class));
+		verify(refundEventAssembler, times(1)).toRefundInitiatedEvent(any(Booking.class), any(BigDecimal.class));
 	}
 
 	private Booking bookingWithOneEntry(BookingStatus bookingStatus, DutyStatus entryStatus) {

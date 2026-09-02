@@ -176,6 +176,24 @@ public class BookingService {
 	public void cancelBooking(String bookingId, String orgId, String reason, BigDecimal cancellationFeeAmount) {
 		Booking booking = getBookingForUpdate(bookingId, orgId);
 
+		/*
+		 * P1.7 -- getBookingForUpdate's lock makes this check race-safe: a
+		 * repeated/concurrent cancel call for a booking already CANCELLED
+		 * (double-tap, retry after a lost response, or a race with another
+		 * concurrent cancel request) is rejected here instead of re-running
+		 * the cancellation side effects, which previously included
+		 * publishing a second RefundInitiatedEvent -- and therefore creating
+		 * a second RefundRequest row -- for the same cancellation. Every
+		 * other status-changing method on this class already guards its
+		 * entry state the same way (see ensureBookingStatus); this one just
+		 * hadn't. Only CANCELLED is rejected -- every other status keeps
+		 * exactly the transitions it already allowed, so no legitimate
+		 * existing cancellation path (employee or client) is narrowed.
+		 */
+		if (booking.getStatus() == BookingStatus.CANCELLED) {
+			throw new BusinessException(ErrorCode.INVALID_BOOKING_STATUS, "Booking is already cancelled");
+		}
+
 		booking.setStatus(BookingStatus.CANCELLED);
 		booking.setRemarks(reason);
 

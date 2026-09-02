@@ -7,6 +7,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
@@ -51,7 +52,30 @@ public class RazorpayPaymentService {
 
 	private static final String DRIVER_DUTY_QR_CONTEXT = "DRIVER_DUTY_QR";
 
-	private final HttpClient httpClient = HttpClient.newHttpClient();
+	/*
+	 * How long a client-app checkout order is considered reusable for. Not a
+	 * Razorpay-imposed value (Razorpay orders don't expire on their own) --
+	 * this bounds how long a stale INITIATED order can be silently handed
+	 * back to a customer who re-opens checkout, so a very old abandoned
+	 * attempt doesn't get resurrected indefinitely. Chosen conservatively
+	 * for a single checkout-modal session; revisit if product wants a
+	 * different window.
+	 */
+	private static final long CHECKOUT_ORDER_REUSE_MINUTES = 30;
+
+	/*
+	 * P1.7 -- explicit connect/request timeouts. This client backs
+	 * fetchPaymentsForQr, the one Razorpay call DutyPaymentReconciliationJob's
+	 * every-7-second loop makes; without a bound, a single hung request could
+	 * stall that whole scheduled run (and, since it's fixedDelay, push every
+	 * other outstanding QR payment's reconciliation back with it) instead of
+	 * failing fast into the loop's existing per-payment catch-and-log.
+	 */
+	private static final Duration RAZORPAY_HTTP_TIMEOUT = Duration.ofSeconds(10);
+
+	private final HttpClient httpClient = HttpClient.newBuilder()
+			.connectTimeout(RAZORPAY_HTTP_TIMEOUT)
+			.build();
 
 	/* ================= PUBLIC KEY ================= */
 
@@ -69,13 +93,57 @@ public class RazorpayPaymentService {
 
 		RazorpayClient razorpayClient = razorpayClientFactory.client(credentials);
 
-		Booking booking = bookingRepo.findByBookingIdAndOrgId(bookingId, orgId)
+		/*
+		 * Lock the booking row for the duration of this transaction -- this is
+		 * what makes concurrent createRazorpayOrder calls for the same booking
+		 * safe: a second request blocks here until the first one's INSERT of
+		 * the new Payment row (below) has committed and released the lock, at
+		 * which point the second request's own read of existing payments will
+		 * see it and can reuse it instead of creating a duplicate order. Same
+		 * lock-the-aggregate-root pattern EstimatePaymentSettlementService
+		 * already uses for the estimate-payment flow.
+		 */
+		Booking booking = bookingRepo.lockByBookingIdAndOrgId(bookingId, orgId)
 				.orElseThrow(() -> new IllegalStateException("Booking not found"));
 
 		Money pending = calculatePendingAmount(booking);
 
 		if (pending == null || pending.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
 			throw new IllegalStateException("No pending amount to pay");
+		}
+
+		Payment reusable = paymentRepo
+				.findFirstByOrgIdAndBooking_BookingIdAndGatewayAndStatusOrderByCreatedAtDesc(
+						orgId, bookingId, PaymentGateway.RAZORPAY, PaymentStatus.INITIATED)
+				.filter(p -> p.getExpiresAt() != null && p.getExpiresAt().isAfter(Instant.now()))
+				.filter(p -> p.getReceivedAmount() != null
+						&& p.getReceivedAmount().getAmount().compareTo(pending.getAmount()) == 0)
+				.filter(p -> p.getGatewayOrderId() != null && !p.getGatewayOrderId().isBlank())
+				.orElse(null);
+
+		if (reusable != null) {
+			String clientNameReuse = booking.getClient() != null && booking.getClient().getName() != null
+					? booking.getClient().getName().getDisplayName()
+					: null;
+			String clientPhoneReuse = booking.getClient() != null ? booking.getClient().getPhone() : null;
+			String clientEmailReuse = booking.getClient() != null ? booking.getClient().getEmail() : null;
+
+			long reusedAmountInPaise = reusable.getReceivedAmount().getAmount()
+					.setScale(2, RoundingMode.HALF_UP)
+					.multiply(BigDecimal.valueOf(100))
+					.longValueExact();
+
+			return RazorpayCheckoutPayload.builder()
+					.key(credentials.keyId())
+					.orderId(reusable.getGatewayOrderId())
+					.amount(reusedAmountInPaise)
+					.currency(credentials.resolvedCurrency())
+					.prefill(RazorpayCheckoutPayload.Prefill.builder()
+							.name(clientNameReuse)
+							.contact(clientPhoneReuse)
+							.email(clientEmailReuse)
+							.build())
+					.build();
 		}
 
 		long amountInPaise = pending.getAmount()
@@ -106,6 +174,7 @@ public class RazorpayPaymentService {
 		payment.setTds(Money.INR(BigDecimal.ZERO));
 		payment.setStatus(PaymentStatus.INITIATED);
 		payment.setCreatedAt(Instant.now());
+		payment.setExpiresAt(Instant.now().plus(CHECKOUT_ORDER_REUSE_MINUTES, ChronoUnit.MINUTES));
 
 		paymentRepo.save(payment);
 
@@ -149,7 +218,14 @@ public class RazorpayPaymentService {
 
 		RazorpayClient razorpayClient = razorpayClientFactory.client(credentials);
 
-		Payment payment = paymentRepo.findByGatewayOrderId(orderId)
+		/*
+		 * PESSIMISTIC_WRITE on the payment row itself (not the booking -- the
+		 * risk here is two concurrent verify calls racing on the SAME order,
+		 * e.g. a double-tap after Razorpay's checkout callback fires, not two
+		 * different orders for the same booking). Serializes any concurrent
+		 * verify against this exact orderId.
+		 */
+		Payment payment = paymentRepo.lockByGatewayOrderId(orderId)
 				.orElseThrow(() -> new IllegalStateException("Payment not found"));
 
 		if (!orgId.equals(payment.getOrgId())) {
@@ -162,7 +238,27 @@ public class RazorpayPaymentService {
 			throw new IllegalStateException("Booking mismatch");
 		}
 
+		/*
+		 * Make verification idempotent -- same guard EstimatePaymentSettlementService
+		 * already uses. A repeated (already-successful) verify call for a payment
+		 * that's already CONFIRMED is a safe no-op, not a failure: no re-fetch from
+		 * Razorpay, no re-publish of PaymentConfirmedEvent, no repeated downstream
+		 * side effects. The controller returns the same SUCCESS response either way.
+		 */
+		if (payment.getStatus() == PaymentStatus.CONFIRMED) {
+			return;
+		}
+
 		razorpayClientFactory.verifySignature(credentials, orderId, paymentId, signature);
+
+		/*
+		 * Prevent one Razorpay payment id from being attached to a different
+		 * Fleetovo payment record than the one it actually belongs to -- same
+		 * protection EstimatePaymentSettlementService already has.
+		 */
+		if (paymentRepo.existsByGatewayPaymentIdAndIdNot(paymentId, payment.getId())) {
+			throw new IllegalStateException("Razorpay payment is already linked to another payment record");
+		}
 
 		com.razorpay.Payment razorpayPayment = razorpayClient.payments.fetch(paymentId);
 
@@ -510,6 +606,7 @@ public class RazorpayPaymentService {
 				.uri(URI.create(url))
 				.header("Authorization", "Basic " + basicAuth)
 				.header("Content-Type", "application/json")
+				.timeout(RAZORPAY_HTTP_TIMEOUT)
 				.GET()
 				.build();
 

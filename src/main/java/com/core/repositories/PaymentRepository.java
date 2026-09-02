@@ -28,6 +28,22 @@ public interface PaymentRepository
 	Optional<Payment> findByGatewayOrderId(
 			String gatewayOrderId);
 
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("""
+			select p
+			from Payment p
+			where p.gatewayOrderId = :gatewayOrderId
+			""")
+	Optional<Payment> lockByGatewayOrderId(
+			@Param("gatewayOrderId")
+			String gatewayOrderId);
+
+	Optional<Payment> findFirstByOrgIdAndBooking_BookingIdAndGatewayAndStatusOrderByCreatedAtDesc(
+			String orgId,
+			String bookingId,
+			PaymentGateway gateway,
+			PaymentStatus status);
+
 	@Query("""
 		SELECT COALESCE(SUM(p.receivedAmount.amount), 0)
 		FROM Payment p
