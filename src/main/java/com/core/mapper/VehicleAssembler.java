@@ -13,15 +13,19 @@ import com.core.dtos.vehicle.MasterVehicleDTO;
 import com.core.models.Client;
 import com.core.models.FleetVehicle;
 import com.core.models.MasterVehicle;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 
 @Component
 public class VehicleAssembler {
 
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
-	public VehicleAssembler(AuditActorService auditActorService) {
+	public VehicleAssembler(AuditActorService auditActorService, FileAccessTokenService fileAccessTokenService) {
 		this.auditActorService = auditActorService;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	/*
@@ -35,7 +39,7 @@ public class VehicleAssembler {
 
 		return new MasterVehicleDTO(mv.getId(), mv.getOrgId(),
 
-				mv.getName(), mv.getPic(),
+				mv.getName(), fileAccessTokenService.toAccessUrl(mv.getPic(), mv.getOrgId(), FileAccessCategory.PUBLIC),
 
 				mv.getFuelSystem(), mv.getFuelConsumption(), mv.getVehicleColor(), mv.getCategory(), mv.getBrand(),
 				mv.getSeats(), mv.getDoors(), mv.getTransmissionType(), mv.getHorsePower(), mv.getVehicleClass(),
@@ -95,7 +99,7 @@ public class VehicleAssembler {
 
 				enrichName(client), client.getEmail(), client.getPhone(),
 
-				null, client.getPic(), client.getSupplier(),
+				null, fileAccessTokenService.toAccessUrl(client.getPic(), client.getOrgId(), FileAccessCategory.PRIVATE), client.getSupplier(),
 
 				null, null,
 

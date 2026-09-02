@@ -9,16 +9,23 @@ import com.core.dtos.client.app.VehicleCatalogDTO;
 import com.core.models.MasterVehicle;
 import com.core.models.Package;
 import com.core.models.embedded.Money;
+import com.core.models.enums.FileAccessCategory;
+import com.core.services.common.FileAccessTokenService;
+
+import lombok.RequiredArgsConstructor;
 
 @Component
+@RequiredArgsConstructor
 public class VehicleCatalogAssembler {
+
+    private final FileAccessTokenService fileAccessTokenService;
 
     public VehicleCatalogDTO assemble(MasterVehicle vehicle, List<Package> packages) {
 
         return new VehicleCatalogDTO(
             vehicle.getId(),
             vehicle.getName(),
-            vehicle.getPic(),
+            fileAccessTokenService.toAccessUrl(vehicle.getPic(), vehicle.getOrgId(), FileAccessCategory.PUBLIC),
             vehicle.getFuelSystem(),
             vehicle.getFuelConsumption(),
             vehicle.getVehicleColor(),

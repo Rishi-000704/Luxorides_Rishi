@@ -41,6 +41,7 @@ import com.core.models.User;
 import com.core.models.UserOtp;
 import com.core.models.enums.AccountType;
 import com.core.models.enums.Authority;
+import com.core.models.enums.FileAccessCategory;
 import com.core.repositories.ClientRepository;
 import com.core.repositories.DriverRepository;
 import com.core.repositories.EmployeeRepository;
@@ -65,6 +66,7 @@ public class AuthenticationService {
 	private final SMSService smsService;
 	private final FileService fileService;
 	private final OtpRecordWriter otpRecordWriter;
+	private final FileAccessTokenService fileAccessTokenService;
 
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 	private static final int OTP_WRITE_MAX_ATTEMPTS = 3;
@@ -73,7 +75,7 @@ public class AuthenticationService {
 			EmployeeRepository employeeRepository, DriverRepository driverRepository,
 			PasswordEncoder passwordEncoder, JwtService jwtService,
 			AuthenticationManager authenticationManager, UserOtpRepository userOtpRepository, SMSService smsService,
-			FileService fileService, OtpRecordWriter otpRecordWriter) {
+			FileService fileService, OtpRecordWriter otpRecordWriter, FileAccessTokenService fileAccessTokenService) {
 		super();
 		this.userRepository = userRepository;
 		this.clientRepository = clientRepository;
@@ -86,6 +88,7 @@ public class AuthenticationService {
 		this.smsService = smsService;
 		this.fileService = fileService;
 		this.otpRecordWriter = otpRecordWriter;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	@Transactional
@@ -324,7 +327,7 @@ public class AuthenticationService {
 					employee.getEmail(),
 					employee.getPhone(),
 					employee.getAddress(),
-					employee.getPic(),
+					fileAccessTokenService.toAccessUrl(employee.getPic(), employee.getOrgId(), FileAccessCategory.PRIVATE),
 					user.getAuthorityList(),
 					employee.getCreatedAt(),
 					employee.getUpdatedAt(),
@@ -459,7 +462,7 @@ public class AuthenticationService {
 							employee.getEmail(),
 							employee.getPhone(),
 							employee.getAddress(),
-							employee.getPic(),
+							fileAccessTokenService.toAccessUrl(employee.getPic(), employee.getOrgId(), FileAccessCategory.PRIVATE),
 
 							user != null ? user.isEnabled() : Boolean.FALSE,
 							user != null ? user.getAuthorityList() : List.of()

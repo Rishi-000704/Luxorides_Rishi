@@ -14,15 +14,19 @@ import com.core.dtos.common.NameDTO;
 import com.core.models.Client;
 import com.core.models.ClientBillingEntity;
 import com.core.models.Passenger;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 
 @Component
 public class ClientAssembler {
 
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
-	public ClientAssembler(AuditActorService auditActorService) {
+	public ClientAssembler(AuditActorService auditActorService, FileAccessTokenService fileAccessTokenService) {
 		this.auditActorService = auditActorService;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	public ClientDTO assemble(Client client) {
@@ -31,7 +35,9 @@ public class ClientAssembler {
 
 				enrichName(client), client.getEmail(), client.getPhone(),
 
-				enrichAddress(client), client.getPic(), client.getSupplier(),
+				enrichAddress(client),
+				fileAccessTokenService.toAccessUrl(client.getPic(), client.getOrgId(), FileAccessCategory.PRIVATE),
+				client.getSupplier(),
 
 				enrichBillingEntities(client.getClientBillingEntity()), enrichPassengers(client.getPassengers()),
 

@@ -25,7 +25,9 @@ import com.core.models.Payment;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.embedded.Money;
 import com.core.models.embedded.PackageSnapshot;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 import com.core.util.EstimateUtil;
 
 import lombok.RequiredArgsConstructor;
@@ -37,6 +39,7 @@ public class EstimateAssembler {
 	private final ClientAssembler clientAssembler;
 	private final VehicleAssembler vehicleAssembler;
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
 	/**
 	 * Lightweight employee response used by estimate create and update
@@ -119,7 +122,8 @@ public class EstimateAssembler {
 						.filter(Objects::nonNull)
 						.map(entry -> assembleEntry(
 								entry,
-								includeEmployeeDetails))
+								includeEmployeeDetails,
+								estimate.getOrgId()))
 						.toList(),
 
 				payments == null
@@ -300,7 +304,7 @@ public class EstimateAssembler {
 		return new PublicEstimateEntryDTO.VehicleDetails(
 				vehicle.getId(),
 				vehicle.getName(),
-				vehicle.getPic(),
+				fileAccessTokenService.toAccessUrl(vehicle.getPic(), vehicle.getOrgId(), FileAccessCategory.PUBLIC),
 				vehicle.getBrand(),
 				vehicle.getCategory(),
 				vehicle.getSeats(),
@@ -353,12 +357,14 @@ public class EstimateAssembler {
 
 		return assembleEntry(
 				entry,
-				false);
+				false,
+				null);
 	}
 
 	private EstimateEntryDTO assembleEntry(
 			EstimateEntry entry,
-			boolean includeEmployeeDetails) {
+			boolean includeEmployeeDetails,
+			String orgId) {
 
 		return new EstimateEntryDTO(
 				entry.getId(),
@@ -401,7 +407,8 @@ public class EstimateAssembler {
 						.filter(Objects::nonNull)
 						.map(charge -> assembleExtraCharge(
 								charge,
-								includeEmployeeDetails))
+								includeEmployeeDetails,
+								orgId))
 						.toList(),
 
 				toMoneyDTO(
@@ -429,7 +436,8 @@ public class EstimateAssembler {
 
 	private EstimateEntryDTO.ExtraChargeDTO assembleExtraCharge(
 			ExtraCharge charge,
-			boolean includeEmployeeDetails) {
+			boolean includeEmployeeDetails,
+			String orgId) {
 
 		return new EstimateEntryDTO.ExtraChargeDTO(
 				charge.getId(),
@@ -439,7 +447,7 @@ public class EstimateAssembler {
 						charge.getAmount()),
 
 				includeEmployeeDetails
-						? charge.getImage()
+						? fileAccessTokenService.toAccessUrl(charge.getImage(), orgId, FileAccessCategory.PRIVATE)
 						: null);
 	}
 

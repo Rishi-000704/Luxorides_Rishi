@@ -12,15 +12,19 @@ import com.core.models.Client;
 import com.core.models.MasterVehicle;
 import com.core.models.Package;
 import com.core.models.embedded.Money;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 
 @Component
 public class PackageAssembler {
 
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
-	public PackageAssembler(AuditActorService auditActorService) {
+	public PackageAssembler(AuditActorService auditActorService, FileAccessTokenService fileAccessTokenService) {
 		this.auditActorService = auditActorService;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	public PackageDTO assemble(Package p) {
@@ -105,7 +109,7 @@ public class PackageAssembler {
 								c.getAddress().getPincode(),
 								c.getAddress().getCountryCode()
 						),
-				c.getPic(),
+				fileAccessTokenService.toAccessUrl(c.getPic(), c.getOrgId(), FileAccessCategory.PRIVATE),
 				c.getSupplier(),
 
 				/* Hard stop – intentionally NOT loaded */
@@ -130,7 +134,7 @@ public class PackageAssembler {
 				v.getId(),
 				v.getOrgId(),
 				v.getName(),
-				v.getPic(),
+				fileAccessTokenService.toAccessUrl(v.getPic(), v.getOrgId(), FileAccessCategory.PUBLIC),
 
 				v.getFuelSystem(),
 				v.getFuelConsumption(),

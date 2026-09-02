@@ -33,15 +33,19 @@ import com.core.models.Payment;
 import com.core.models.embedded.DisplayAddress;
 import com.core.models.embedded.Money;
 import com.core.models.embedded.Name;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 
 @Component
 public class BookingAssembler {
 
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
-	public BookingAssembler(AuditActorService auditActorService) {
+	public BookingAssembler(AuditActorService auditActorService, FileAccessTokenService fileAccessTokenService) {
 		this.auditActorService = auditActorService;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	/*
@@ -95,7 +99,7 @@ public class BookingAssembler {
 				d.getRunningDays(), d.getExtraChargebleDistance(), d.getExtraChargebleTime(),
 				Boolean.TRUE.equals(d.getNightChargeble()),
 
-				d.getDutySlipImage(),
+				fileAccessTokenService.toAccessUrl(d.getDutySlipImage(), d.getBooking().getOrgId(), FileAccessCategory.PRIVATE),
 
 				d.getDutyTotal(),
 
@@ -107,7 +111,8 @@ public class BookingAssembler {
 
 				d.getSupplier() != null ? enrichClient(d.getSupplier()) : null,
 
-				d.getCharges() == null ? List.of() : d.getCharges().stream().map(this::enrichCharge).toList(),
+				d.getCharges() == null ? List.of()
+						: d.getCharges().stream().map(c -> enrichCharge(c, d.getBooking().getOrgId())).toList(),
 
 				d.getPassengerIds(),d.getClientNotes(),
 
@@ -128,7 +133,9 @@ public class BookingAssembler {
 
 				enrichName(client.getName()), client.getEmail(), client.getPhone(),
 
-				enrichAddress(client.getAddress()), client.getPic(), client.getSupplier(),
+				enrichAddress(client.getAddress()),
+				fileAccessTokenService.toAccessUrl(client.getPic(), client.getOrgId(), FileAccessCategory.PRIVATE),
+				client.getSupplier(),
 
 				enrichBillingEntities(client.getClientBillingEntity()), enrichPassengers(client.getPassengers()),
 
@@ -214,12 +221,12 @@ public class BookingAssembler {
 	 * =====================================================
 	 */
 
-	private BookingEntryDTO.ExtraChargeDTO enrichCharge(ExtraCharge c) {
+	private BookingEntryDTO.ExtraChargeDTO enrichCharge(ExtraCharge c, String orgId) {
 		return new BookingEntryDTO.ExtraChargeDTO(
 				c.getId(),
 				c.getDescription(),
 				toMoneyDTO(c.getAmount()),
-				c.getImage()
+				fileAccessTokenService.toAccessUrl(c.getImage(), orgId, FileAccessCategory.PRIVATE)
 		);
 	}
 
@@ -236,7 +243,8 @@ public class BookingAssembler {
 
 				enrichAddress(driver.getAddress()),
 
-				driver.getAdharNumber(), driver.getLicenseNumber(), driver.getPic(),
+				driver.getAdharNumber(), driver.getLicenseNumber(),
+				fileAccessTokenService.toAccessUrl(driver.getPic(), driver.getOrgId(), FileAccessCategory.PRIVATE),
 
 				driver.getOwnership(),
 
@@ -257,7 +265,7 @@ public class BookingAssembler {
 
 		return new MasterVehicleDTO(mv.getId(), mv.getOrgId(),
 
-				mv.getName(), mv.getPic(),
+				mv.getName(), fileAccessTokenService.toAccessUrl(mv.getPic(), mv.getOrgId(), FileAccessCategory.PUBLIC),
 
 				mv.getFuelSystem(), mv.getFuelConsumption(), mv.getVehicleColor(), mv.getCategory(), mv.getBrand(),
 				mv.getSeats(), mv.getDoors(), mv.getTransmissionType(), mv.getHorsePower(), mv.getVehicleClass(),

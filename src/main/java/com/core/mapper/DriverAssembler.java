@@ -10,15 +10,19 @@ import com.core.dtos.driver.DriverListItem;
 import com.core.models.Driver;
 import com.core.models.embedded.DisplayAddress;
 import com.core.models.embedded.Name;
+import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
+import com.core.services.common.FileAccessTokenService;
 
 @Component
 public class DriverAssembler {
 
 	private final AuditActorService auditActorService;
+	private final FileAccessTokenService fileAccessTokenService;
 
-	public DriverAssembler(AuditActorService auditActorService) {
+	public DriverAssembler(AuditActorService auditActorService, FileAccessTokenService fileAccessTokenService) {
 		this.auditActorService = auditActorService;
+		this.fileAccessTokenService = fileAccessTokenService;
 	}
 
 	/* ========================= FULL DTO ========================= */
@@ -36,7 +40,8 @@ public class DriverAssembler {
 
 				enrichAddress(driver.getAddress()),
 
-				driver.getAdharNumber(), driver.getLicenseNumber(), driver.getPic(),
+				driver.getAdharNumber(), driver.getLicenseNumber(),
+				fileAccessTokenService.toAccessUrl(driver.getPic(), driver.getOrgId(), FileAccessCategory.PRIVATE),
 
 				driver.getOwnership(),
 
@@ -57,7 +62,8 @@ public class DriverAssembler {
 
 				enrichName(driver.getName()), driver.getPhone(),
 
-				enrichAddress(driver.getAddress()), driver.getLicenseNumber(), driver.getPic(),
+				enrichAddress(driver.getAddress()), driver.getLicenseNumber(),
+				fileAccessTokenService.toAccessUrl(driver.getPic(), driver.getOrgId(), FileAccessCategory.PRIVATE),
 
 				driver.getOwnership());
 	}

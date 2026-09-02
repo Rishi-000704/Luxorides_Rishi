@@ -17,12 +17,14 @@ import com.core.models.DriverDutyExpense;
 import com.core.models.Payment;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.enums.DriverDutyCheckpointType;
+import com.core.models.enums.FileAccessCategory;
 import com.core.models.enums.PaymentStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.PaymentRepository;
+import com.core.services.common.FileAccessTokenService;
 
 import lombok.RequiredArgsConstructor;
 
@@ -37,6 +39,7 @@ public class EmployeeDriverDutySubmissionService {
 	private final DriverDutyExpenseRepository expenseRepository;
 	private final DriverDutyAccessTokenRepository tokenRepository;
 	private final PaymentRepository paymentRepository;
+	private final FileAccessTokenService fileAccessTokenService;
 
 	@Transactional(readOnly = true)
 	public DriverDutySubmissionViewResponse getDutySubmissionView(
@@ -94,11 +97,11 @@ public class EmployeeDriverDutySubmissionService {
 
 				toLinkStatus(latestToken),
 
-				toCheckpointView(startCheckpoint),
-				toCheckpointView(endCheckpoint),
+				toCheckpointView(startCheckpoint, orgId),
+				toCheckpointView(endCheckpoint, orgId),
 
 				expenses.stream()
-						.map(this::toExpenseView)
+						.map(expense -> toExpenseView(expense, orgId))
 						.toList(),
 
 				toSummaryView(
@@ -138,7 +141,8 @@ public class EmployeeDriverDutySubmissionService {
 	}
 
 	private DriverDutySubmissionViewResponse.CheckpointSubmission toCheckpointView(
-			DriverDutyCheckpoint checkpoint
+			DriverDutyCheckpoint checkpoint,
+			String orgId
 	) {
 		if (checkpoint == null) {
 			return null;
@@ -151,7 +155,7 @@ public class EmployeeDriverDutySubmissionService {
 
 				checkpoint.getOdometerKm(),
 				checkpoint.getOdometerPhoto(),
-				fileUrl(checkpoint.getOdometerPhoto()),
+				fileUrl(checkpoint.getOdometerPhoto(), orgId),
 
 				toAddressView(checkpoint.getLocation()),
 				checkpoint.getAccuracyMeters(),
@@ -183,7 +187,8 @@ public class EmployeeDriverDutySubmissionService {
 	}
 
 	private DriverDutySubmissionViewResponse.ExpenseSubmission toExpenseView(
-			DriverDutyExpense expense
+			DriverDutyExpense expense,
+			String orgId
 	) {
 		return new DriverDutySubmissionViewResponse.ExpenseSubmission(
 				expense.getId(),
@@ -192,7 +197,7 @@ public class EmployeeDriverDutySubmissionService {
 				currency(expense.getAmount()),
 				expense.getDescription(),
 				expense.getReceiptPhoto(),
-				fileUrl(expense.getReceiptPhoto()),
+				fileUrl(expense.getReceiptPhoto(), orgId),
 				expense.getStatus()
 		);
 	}
@@ -327,11 +332,11 @@ public class EmployeeDriverDutySubmissionService {
 		return money.getCurrency().name();
 	}
 
-	private String fileUrl(String fileName) {
+	private String fileUrl(String fileName, String orgId) {
 		if (fileName == null || fileName.isBlank()) {
 			return null;
 		}
 
-		return "/file/" + fileName;
+		return "/file/" + fileAccessTokenService.toAccessUrl(fileName, orgId, FileAccessCategory.PRIVATE);
 	}
 }
