@@ -7,6 +7,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -448,10 +450,26 @@ public class AuthenticationService {
 	public List<EmployeeListItem> getEmployeeList(String orgId) {
 		List<Employee> employees = this.employeeRepository.findByOrgId(orgId);
 
+		/*
+		 * P1.4 -- previously called userRepository.findByOrgIdAndId once per
+		 * employee (1 + N queries). Batched into a single IN query, matching
+		 * the same org-scoping and the same null-safe fallback below for an
+		 * employee whose user record isn't found.
+		 */
+		List<String> userIds = employees.stream()
+				.map(Employee::getUserId)
+				.filter(java.util.Objects::nonNull)
+				.distinct()
+				.toList();
+
+		Map<String, User> usersByUserId = userIds.isEmpty()
+				? Map.of()
+				: this.userRepository.findByOrgIdAndIdIn(orgId, userIds).stream()
+						.collect(Collectors.toMap(User::getId, Function.identity()));
+
 		return employees.stream()
 				.map(employee -> {
-					User user = this.userRepository.findByOrgIdAndId(orgId, employee.getUserId())
-							.orElse(null);
+					User user = usersByUserId.get(employee.getUserId());
 
 					return new EmployeeListItem(
 							employee.getId(),

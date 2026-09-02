@@ -3,6 +3,9 @@ package com.core.services;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,13 +43,27 @@ public class FleetAnalyticsService {
 
 	@Transactional(readOnly = true)
 	public List<VehicleUtilizationResponse> vehicleUtilization(String orgId, Instant from, Instant to) {
-		return bookingEntryRepository.aggregateVehicleUtilization(orgId, from, to).stream()
+		List<Object[]> rows = bookingEntryRepository.aggregateVehicleUtilization(orgId, from, to);
+
+		/*
+		 * P1.4 -- previously called fleetVehicleRepository.findByIdAndOrgId
+		 * once per aggregate row (1 + N queries). Batched into one IN query
+		 * (which also JOIN FETCHes masterVehicle, see FleetVehicleRepository).
+		 */
+		List<String> fleetVehicleIds = rows.stream().map(row -> (String) row[0]).distinct().toList();
+
+		Map<String, FleetVehicle> vehiclesById = fleetVehicleIds.isEmpty()
+				? Map.of()
+				: fleetVehicleRepository.findByOrgIdAndIdIn(orgId, fleetVehicleIds).stream()
+						.collect(Collectors.toMap(FleetVehicle::getId, Function.identity()));
+
+		return rows.stream()
 				.map(row -> {
 					String fleetVehicleId = (String) row[0];
 					long completedDuties = ((Number) row[1]).longValue();
 					long totalDistanceKm = row[2] == null ? 0L : ((Number) row[2]).longValue();
 
-					FleetVehicle vehicle = fleetVehicleRepository.findByIdAndOrgId(fleetVehicleId, orgId).orElse(null);
+					FleetVehicle vehicle = vehiclesById.get(fleetVehicleId);
 
 					String vehicleName = vehicle != null && vehicle.getMasterVehicle() != null
 							? vehicle.getMasterVehicle().getName()
@@ -62,18 +79,43 @@ public class FleetAnalyticsService {
 
 	@Transactional(readOnly = true)
 	public List<DriverAnalyticsResponse> driverAnalytics(String orgId, Instant from, Instant to) {
-		return bookingEntryRepository.aggregateDriverCompletedDuties(orgId, from, to).stream()
+		List<Object[]> rows = bookingEntryRepository.aggregateDriverCompletedDuties(orgId, from, to);
+
+		/*
+		 * P1.4 -- previously called driverRepository.findByIdAndOrgId +
+		 * tripRatingRepository.findAverageStarsByDriverIdAndOrgId +
+		 * countByDriverIdAndOrgId once each per aggregate row (1 + 3N
+		 * queries). Both batched into one IN query each.
+		 */
+		List<String> driverIds = rows.stream().map(row -> (String) row[0]).distinct().toList();
+
+		Map<String, Driver> driversById = driverIds.isEmpty()
+				? Map.of()
+				: driverRepository.findByOrgIdAndIdIn(orgId, driverIds).stream()
+						.collect(Collectors.toMap(Driver::getId, Function.identity()));
+
+		Map<String, double[]> ratingsByDriverId = driverIds.isEmpty()
+				? Map.of()
+				: tripRatingRepository.aggregateStarsByDriverIds(orgId, driverIds).stream()
+						.collect(Collectors.toMap(
+								r -> (String) r[0],
+								r -> new double[] { (Double) r[1], ((Number) r[2]).doubleValue() }));
+
+		return rows.stream()
 				.map(row -> {
 					String driverId = (String) row[0];
 					long completedDuties = ((Number) row[1]).longValue();
 
-					Driver driver = driverRepository.findByIdAndOrgId(driverId, orgId).orElse(null);
+					Driver driver = driversById.get(driverId);
 					String driverName = driver != null && driver.getName() != null
 							? driver.getName().getDisplayName()
 							: null;
 
-					Double ratingAverage = tripRatingRepository.findAverageStarsByDriverIdAndOrgId(driverId, orgId);
-					long ratingCount = tripRatingRepository.countByDriverIdAndOrgId(driverId, orgId);
+					// GROUP BY omits a driver with zero ratings entirely -- same
+					// null-average/0-count semantics as the single-driver methods.
+					double[] rating = ratingsByDriverId.get(driverId);
+					Double ratingAverage = rating != null ? rating[0] : null;
+					long ratingCount = rating != null ? (long) rating[1] : 0L;
 
 					return new DriverAnalyticsResponse(driverId, driverName, completedDuties, ratingAverage, ratingCount);
 				})

@@ -427,6 +427,25 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 	Integer findMaxClosingKmForVehicle(@Param("orgId") String orgId, @Param("fleetVehicleId") String fleetVehicleId);
 
 	/*
+	 * P1.4 -- batch equivalent of findMaxClosingKmForVehicle, used by
+	 * VehicleMaintenanceService.predict, which previously called the
+	 * single-vehicle version once per vehicle (1+N). A fleetVehicleId with no
+	 * matching rows is simply absent from the result -- callers must treat
+	 * that the same as the single-vehicle method's null return.
+	 * Row shape: [0]=fleetVehicleId (String), [1]=maxClosingKm (Integer).
+	 */
+	@Query("""
+		SELECT e.fleetVehicleId, MAX(e.closingKM)
+		FROM BookingEntry e
+		WHERE e.booking.orgId = :orgId
+		  AND e.fleetVehicleId IN :fleetVehicleIds
+		  AND e.closingKM IS NOT NULL
+		GROUP BY e.fleetVehicleId
+	""")
+	List<Object[]> findMaxClosingKmForVehicles(
+			@Param("orgId") String orgId, @Param("fleetVehicleIds") java.util.Collection<String> fleetVehicleIds);
+
+	/*
 	 * Real historical completed-trip data for FareRecommendationService --
 	 * distance-proximity filtering happens in Java (see that service) since
 	 * it needs closingKM-startingKM, which JPQL can compute but bucketing

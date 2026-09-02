@@ -3,6 +3,9 @@ package com.core.services;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,17 +72,49 @@ public class VehicleMaintenanceService {
 
 	@Transactional(readOnly = true)
 	public List<MaintenancePredictionResponse> predict(String orgId) {
-		return fleetVehicleRepository.findByOrgId(orgId).stream()
-				.map(vehicle -> predictOne(orgId, vehicle))
+		/*
+		 * P1.4 -- findByOrgIdFetchMasterVehicle (JOIN FETCH masterVehicle,
+		 * see FleetVehicleRepository) avoids a lazy load per vehicle for the
+		 * vehicleName below, without touching the shared plain findByOrgId
+		 * other callers (DispatchSuggestionService, FleetVehicleDataExchangeHandler)
+		 * still use unchanged.
+		 */
+		List<FleetVehicle> vehicles = fleetVehicleRepository.findByOrgIdFetchMasterVehicle(orgId);
+
+		List<String> vehicleIds = vehicles.stream().map(FleetVehicle::getId).toList();
+
+		/*
+		 * Previously called findMaxClosingKmForVehicle +
+		 * findFirstByFleetVehicleIdAndOrgIdOrderByServiceDateDesc once each
+		 * per vehicle (1 + 2N queries). Both batched: the odometer max via a
+		 * grouped aggregate, the latest service record via one fetch of all
+		 * matching rows, grouped by vehicle and reduced to the max-by-date in
+		 * Java (record counts per vehicle are small real service history,
+		 * not a high-volume table -- see VehicleMaintenanceRecordRepository).
+		 */
+		Map<String, Integer> maxClosingKmByVehicle = vehicleIds.isEmpty()
+				? Map.of()
+				: bookingEntryRepository.findMaxClosingKmForVehicles(orgId, vehicleIds).stream()
+						.collect(Collectors.toMap(r -> (String) r[0], r -> (Integer) r[1]));
+
+		Map<String, VehicleMaintenanceRecord> lastServiceByVehicle = vehicleIds.isEmpty()
+				? Map.of()
+				: recordRepository.findByOrgIdAndFleetVehicleIdIn(orgId, vehicleIds).stream()
+						.collect(Collectors.toMap(
+								VehicleMaintenanceRecord::getFleetVehicleId,
+								Function.identity(),
+								(a, b) -> a.getServiceDate().isAfter(b.getServiceDate()) ? a : b));
+
+		return vehicles.stream()
+				.map(vehicle -> predictOne(
+						vehicle,
+						maxClosingKmByVehicle.get(vehicle.getId()),
+						lastServiceByVehicle.get(vehicle.getId())))
 				.toList();
 	}
 
-	private MaintenancePredictionResponse predictOne(String orgId, FleetVehicle vehicle) {
-		Integer currentOdometer = bookingEntryRepository.findMaxClosingKmForVehicle(orgId, vehicle.getId());
-
-		VehicleMaintenanceRecord lastService = recordRepository
-				.findFirstByFleetVehicleIdAndOrgIdOrderByServiceDateDesc(vehicle.getId(), orgId)
-				.orElse(null);
+	private MaintenancePredictionResponse predictOne(
+			FleetVehicle vehicle, Integer currentOdometer, VehicleMaintenanceRecord lastService) {
 
 		Integer kmSinceService = null;
 		Long daysSinceService = null;

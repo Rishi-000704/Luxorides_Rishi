@@ -1,5 +1,6 @@
 package com.core.repositories;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -25,6 +26,12 @@ public interface DriverRepository extends JpaRepository<Driver, String> {
 	long countByOrgId(String orgId);
 
 	List<Driver> findByClientIdAndOrgId(String clientId, String orgId);
+
+	/*
+	 * P1.4 -- batch lookup for FleetAnalyticsService.driverAnalytics, which
+	 * previously called findByIdAndOrgId once per aggregate row (1+N).
+	 */
+	List<Driver> findByOrgIdAndIdIn(String orgId, Collection<String> ids);
 
 	@Query("""
 			    SELECT x

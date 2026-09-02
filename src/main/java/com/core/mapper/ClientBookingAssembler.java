@@ -1,6 +1,8 @@
 package com.core.mapper;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
 
@@ -13,8 +15,10 @@ import com.core.models.FleetVehicle;
 import com.core.models.MasterVehicle;
 import com.core.models.Payment;
 import com.core.models.embedded.Money;
+import com.core.models.enums.FileAccessCategory;
 import com.core.models.enums.PaymentStatus;
 import com.core.repositories.TripRatingRepository;
+import com.core.services.common.FileAccessTokenService;
 
 import lombok.RequiredArgsConstructor;
 
@@ -23,6 +27,7 @@ import lombok.RequiredArgsConstructor;
 public final class ClientBookingAssembler {
 
 	private final TripRatingRepository tripRatingRepository;
+	private final FileAccessTokenService fileAccessTokenService;
 
 	/* ===================== ROOT ===================== */
 
@@ -47,17 +52,38 @@ public final class ClientBookingAssembler {
 			return List.of();
 		}
 
-		return booking.getEntries().stream().map(e -> mapEntry(e, booking)).toList();
+		/*
+		 * P1.4 -- previously mapEntry called
+		 * tripRatingRepository.findAverageStarsByDriverIdAndOrgId +
+		 * countByDriverIdAndOrgId once each per entry (1 + 2N queries for a
+		 * booking with N duty legs). Batched into one IN query for every
+		 * distinct driver across the booking's entries.
+		 */
+		List<String> driverIds = booking.getEntries().stream()
+				.map(e -> e.getDriver() != null ? e.getDriver().getId() : null)
+				.filter(java.util.Objects::nonNull)
+				.distinct()
+				.toList();
+
+		Map<String, double[]> ratingsByDriverId = driverIds.isEmpty()
+				? Map.of()
+				: tripRatingRepository.aggregateStarsByDriverIds(booking.getOrgId(), driverIds).stream()
+						.collect(Collectors.toMap(
+								r -> (String) r[0],
+								r -> new double[] { (Double) r[1], ((Number) r[2]).doubleValue() }));
+
+		return booking.getEntries().stream().map(e -> mapEntry(e, booking, ratingsByDriverId)).toList();
 	}
 
-	private ClientBookingDTO.Entry mapEntry(BookingEntry e, Booking booking) {
+	private ClientBookingDTO.Entry mapEntry(BookingEntry e, Booking booking, Map<String, double[]> ratingsByDriverId) {
 
 		FleetVehicle fv = e.getAllotedVehicle();
 		MasterVehicle mv = e.getRequestedVehicle();
 
 		String vehicleName = fv != null ? fv.getMasterVehicle().getName() : mv != null ? mv.getName() : null;
 
-		String pic = fv != null ? fv.getMasterVehicle().getPic() : mv != null ? mv.getPic() : null;
+		String rawPic = fv != null ? fv.getMasterVehicle().getPic() : mv != null ? mv.getPic() : null;
+		String pic = fileAccessTokenService.toAccessUrl(rawPic, booking.getOrgId(), FileAccessCategory.PUBLIC);
 
 		String registrationNumber = fv != null ? fv.getRegistrationNumber() : null;
 
@@ -67,13 +93,11 @@ public final class ClientBookingAssembler {
 
 		String driverId = e.getDriver() != null ? e.getDriver().getId() : null;
 
-		Double ratingAverage = driverId != null
-				? tripRatingRepository.findAverageStarsByDriverIdAndOrgId(driverId, booking.getOrgId())
-				: null;
-
-		Long ratingCount = driverId != null
-				? tripRatingRepository.countByDriverIdAndOrgId(driverId, booking.getOrgId())
-				: 0L;
+		// GROUP BY omits a driver with zero ratings entirely -- same
+		// null-average/0-count semantics as the single-driver methods this replaced.
+		double[] rating = driverId != null ? ratingsByDriverId.get(driverId) : null;
+		Double ratingAverage = rating != null ? rating[0] : null;
+		Long ratingCount = rating != null ? (long) rating[1] : 0L;
 
 		return new ClientBookingDTO.Entry(e.getDutyId(), e.getStatus(), e.getPack(),
 				mapPassengers(e.getPassengerIds(), booking),
@@ -83,7 +107,9 @@ public final class ClientBookingAssembler {
 
 				// Driver
 				e.getDriver() != null ? e.getDriver().getName().getDisplayName() : null,
-				e.getDriver() != null ? e.getDriver().getPic() : null,
+				e.getDriver() != null
+						? fileAccessTokenService.toAccessUrl(e.getDriver().getPic(), booking.getOrgId(), FileAccessCategory.PRIVATE)
+						: null,
 				e.getDriver() != null ? e.getDriver().getGender() : null,
 				e.getDriver() != null ? e.getDriver().getPhone() : null,
 				ratingAverage, ratingCount,

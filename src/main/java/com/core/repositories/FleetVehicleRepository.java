@@ -1,5 +1,6 @@
 package com.core.repositories;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -14,12 +15,45 @@ import com.core.models.FleetVehicle;
 
 @Repository
 public interface FleetVehicleRepository extends JpaRepository<FleetVehicle, String> {
-	
+
 	Optional<FleetVehicle> findByRegistrationNumber(String registrationNumber);
 
 	Optional<FleetVehicle> findByIdAndOrgId(String id, String orgId);
 
 	List<FleetVehicle> findByOrgId(String orgId);
+
+	/*
+	 * P1.4 -- batch lookup for FleetAnalyticsService.vehicleUtilization, which
+	 * previously called findByIdAndOrgId once per aggregate row (1+N). JOIN
+	 * FETCH masterVehicle too, since every caller of this method immediately
+	 * reads vehicle.getMasterVehicle().getName() -- without it, batching the
+	 * FleetVehicle lookup alone would just move the N+1 one hop deeper (one
+	 * lazy-load per distinct master vehicle instead of per row).
+	 */
+	@Query("""
+		SELECT fv
+		FROM FleetVehicle fv
+		LEFT JOIN FETCH fv.masterVehicle
+		WHERE fv.orgId = :orgId
+		  AND fv.id IN :ids
+	""")
+	List<FleetVehicle> findByOrgIdAndIdIn(@Param("orgId") String orgId, @Param("ids") Collection<String> ids);
+
+	/*
+	 * P1.4 -- used only by VehicleMaintenanceService.predict, which iterates
+	 * every vehicle and reads vehicle.getMasterVehicle().getName() for each.
+	 * A dedicated method (not a change to the widely-shared findByOrgId
+	 * above, which DispatchSuggestionService and FleetVehicleDataExchangeHandler
+	 * also call and don't need this join for) so this fix doesn't alter
+	 * those other callers' query shape.
+	 */
+	@Query("""
+		SELECT fv
+		FROM FleetVehicle fv
+		LEFT JOIN FETCH fv.masterVehicle
+		WHERE fv.orgId = :orgId
+	""")
+	List<FleetVehicle> findByOrgIdFetchMasterVehicle(@Param("orgId") String orgId);
 	
 	public List<FleetVehicle> findByMasterVehicleIdAndOrgId(String masterVehicleId, String orgId);
 
