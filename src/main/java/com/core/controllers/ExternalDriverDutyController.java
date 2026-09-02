@@ -28,6 +28,7 @@ import com.core.dtos.driverduty.DriverDutySosResponse;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
+import com.core.dtos.driverduty.DutyRouteLegResponse;
 import com.core.dtos.driverduty.GarageReturnConfirmationResponse;
 import com.core.dtos.driverduty.PickupOtpGenerateResponse;
 import com.core.dtos.driverduty.PickupOtpVerifyRequest;
@@ -58,6 +59,11 @@ public class ExternalDriverDutyController {
 	@GetMapping("/{token}/payment-status")
 	public QrPaymentStatusResponse checkQrPaymentStatus(@PathVariable String token) {
 		return externalDriverDutyService.checkQrPaymentStatus(token);
+	}
+
+	@GetMapping("/{token}/route/{leg}")
+	public DutyRouteLegResponse getRouteForLeg(@PathVariable String token, @PathVariable String leg) {
+		return externalDriverDutyService.getRouteForLeg(token, leg);
 	}
 
 	@PostMapping(

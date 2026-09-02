@@ -3,6 +3,8 @@ package com.core.models;
 import java.time.Instant;
 
 import com.core.models.embedded.AuditableEntity;
+import com.core.models.enums.CleanlinessRating;
+import com.core.models.enums.FuelLevel;
 import com.core.models.enums.VehicleConditionRating;
 
 import jakarta.persistence.Column;
@@ -83,6 +85,31 @@ public class VehicleInspection extends AuditableEntity {
 
 	@Column(length = 1000)
 	private String damageNotes;
+
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
+	private CleanlinessRating cleanliness = CleanlinessRating.CLEAN;
+
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
+	private VehicleConditionRating tyreCondition = VehicleConditionRating.GOOD;
+
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
+	private VehicleConditionRating lightsCondition = VehicleConditionRating.GOOD;
+
+	@Enumerated(EnumType.STRING)
+	@Column(length = 20)
+	private FuelLevel fuelLevel;
+
+	/*
+	 * Explicit driver attestation, separate from "form has all required
+	 * fields" -- lets submitInspection distinguish a driver who genuinely
+	 * confirmed the vehicle is ready from a payload that merely happens to
+	 * have every field populated (e.g. a replayed/tampered request).
+	 */
+	@Column(nullable = false)
+	private boolean driverConfirmed = false;
 
 	private Instant submittedAt;
 }

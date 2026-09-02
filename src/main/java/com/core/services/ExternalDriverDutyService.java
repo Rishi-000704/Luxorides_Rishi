@@ -9,7 +9,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
@@ -29,6 +31,7 @@ import com.core.dtos.driverduty.DriverDutyReturnGarageRequest;
 import com.core.dtos.driverduty.DriverDutyStartRequest;
 import com.core.dtos.driverduty.DriverDutyStartResponse;
 import com.core.dtos.driverduty.DriverDutySummaryResponse;
+import com.core.dtos.driverduty.DutyRouteLegResponse;
 import com.core.dtos.driverduty.DutyCompletionSummary;
 import com.core.dtos.driverduty.GarageReturnConfirmationResponse;
 import com.core.dtos.driverduty.PackageFareBreakdown;
@@ -255,6 +258,63 @@ public class ExternalDriverDutyService {
 				started,
 				completed
 		);
+	}
+
+	private static final Set<String> VALID_ROUTE_LEGS = Set.of("PICKUP", "DROP", "GARAGE");
+
+	/*
+	 * Real, on-demand route for one leg of the garage-to-garage model,
+	 * computed the same way as the existing C->A return-leg estimate (same
+	 * LocationService/provider chain) -- from each leg's known waypoints
+	 * (garage/pickup/drop as captured on the booking), not the driver's live
+	 * position. Read-only: uses accessToken.getBookingEntry() directly
+	 * rather than lockEntryForDutyExecution, since this may be polled
+	 * repeatedly during navigation and has nothing to write.
+	 */
+	@Transactional(readOnly = true)
+	public DutyRouteLegResponse getRouteForLeg(String rawToken, String legParam) {
+		String leg = legParam == null ? "" : legParam.toUpperCase(Locale.ROOT);
+		if (!VALID_ROUTE_LEGS.contains(leg)) {
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "leg must be one of PICKUP, DROP, GARAGE");
+		}
+
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = accessToken.getBookingEntry();
+
+		AddressSnapshot from;
+		AddressSnapshot to;
+		switch (leg) {
+			case "PICKUP" -> {
+				from = resolveGarageLocation(entry);
+				to = entry.getReportingLocation();
+			}
+			case "DROP" -> {
+				from = entry.getReportingLocation();
+				to = entry.getDropLocation();
+			}
+			default -> {
+				from = entry.getDropLocation();
+				to = resolveGarageLocation(entry);
+			}
+		}
+
+		if (!locationPresent(from) || !locationPresent(to)) {
+			return new DutyRouteLegResponse(leg, false, null, null, null, false, toGeoPoint(from), toGeoPoint(to), null);
+		}
+
+		try {
+			DistanceTimeResult result = locationService.calculateDistanceAndTime(from, to);
+			boolean routeAvailable = result.routeGeometry() != null && !result.routeGeometry().isEmpty();
+
+			return new DutyRouteLegResponse(
+					leg, true, result.distanceKm(), result.durationSeconds(), result.provider(),
+					routeAvailable, toGeoPoint(from), toGeoPoint(to), result.routeGeometry()
+			);
+		} catch (Exception ex) {
+			// Same non-fatal convention as calculateGarageReturnEstimate -- an
+			// honest "unavailable" beats fabricating a route.
+			return new DutyRouteLegResponse(leg, false, null, null, null, false, toGeoPoint(from), toGeoPoint(to), null);
+		}
 	}
 
 	/*

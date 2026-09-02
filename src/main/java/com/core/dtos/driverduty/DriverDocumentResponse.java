@@ -8,6 +8,7 @@ public record DriverDocumentResponse(
 		String documentType,
 		DocumentVerificationStatus status,
 		String rejectionReason,
-		Instant verifiedAt
+		Instant verifiedAt,
+		Instant expiryDate
 ) {
 }
