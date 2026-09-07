@@ -23,6 +23,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.Index;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -44,11 +45,34 @@ import lombok.Setter;
  * query. A plain (non-unique) index -- safe to add regardless of existing
  * data, unlike a uniqueness constraint.
  */
+/*
+ * uk_payment_gateway_order_id / uk_payment_gateway_payment_id -- DB-level
+ * backstop for the identifiers the whole recovery/reconciliation design
+ * depends on being unique (see RazorpayPaymentService.verifyPayment /
+ * reconcileByGatewayOrderId, both of which already re-check
+ * existsByGatewayPaymentIdAndIdNot at the application level, but that check
+ * alone cannot close a genuine race between two different transactions).
+ * Safe to add via Hibernate's ddl-auto=update (this project has no separate
+ * migration framework -- these annotations ARE the schema mechanism) because
+ * MySQL/InnoDB unique indexes treat every NULL as distinct, so the many
+ * existing rows that never had a gatewayOrderId/gatewayPaymentId (MANUAL_ENTRY
+ * payments; INITIATED rows awaiting a gatewayPaymentId) do not collide.
+ * IMPORTANT (documented per audit Phase 1F): this was NOT verified against
+ * live production data -- this engagement has no DB connection available. If
+ * any duplicate non-null value already exists, ddl-auto=update's ALTER TABLE
+ * will fail at startup. Before deploying, run:
+ *   SELECT gateway_order_id, COUNT(*) FROM payment WHERE gateway_order_id IS NOT NULL GROUP BY gateway_order_id HAVING COUNT(*) > 1;
+ *   SELECT gateway_payment_id, COUNT(*) FROM payment WHERE gateway_payment_id IS NOT NULL GROUP BY gateway_payment_id HAVING COUNT(*) > 1;
+ * and resolve any hits manually first.
+ */
 @Table(name = "payment", indexes = {
 		@Index(name = "idx_payment_booking", columnList = "booking_id"),
 		@Index(name = "idx_payment_invoice", columnList = "invoice_id"),
 		@Index(name = "idx_payment_estimate", columnList = "estimate_id"),
 		@Index(name = "idx_payment_reconciliation", columnList = "collection_context, status, gateway, expires_at")
+}, uniqueConstraints = {
+		@UniqueConstraint(name = "uk_payment_gateway_order_id", columnNames = "gateway_order_id"),
+		@UniqueConstraint(name = "uk_payment_gateway_payment_id", columnNames = "gateway_payment_id")
 })
 public class Payment extends AuditableEntity {
 

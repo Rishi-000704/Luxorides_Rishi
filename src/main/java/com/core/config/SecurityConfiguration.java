@@ -38,7 +38,7 @@ public class SecurityConfiguration {
 																											// CORS
 																											// configuration
 				.authorizeHttpRequests(auth -> auth
-						.requestMatchers("/auth/**", "/file/**", "/", "/external/**", "/driver-api/**", "/actuator/**", "/estimate-api/**", "/ws/**", "/public/**")
+						.requestMatchers("/auth/**", "/file/**", "/", "/external/**", "/driver-api/**", "/actuator/**", "/estimate-api/**", "/ws/**", "/public/**", "/webhooks/razorpay/**")
 						.permitAll().anyRequest().authenticated())
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authenticationProvider(authenticationProvider)

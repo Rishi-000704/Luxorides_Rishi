@@ -10,7 +10,8 @@ public record RazorpayCredentials(
         String displayName,
         Boolean checkoutEnabled,
         Boolean qrEnabled,
-        Boolean autoCapture
+        Boolean autoCapture,
+        String webhookSecret
 ) {
 
     public static final String DEFAULT_API_BASE_URL = "https://api.razorpay.com/v1";
@@ -51,5 +52,9 @@ public record RazorpayCredentials(
 
     public boolean isAutoCapture() {
         return Boolean.TRUE.equals(autoCapture);
+    }
+
+    public boolean hasWebhookSecret() {
+        return webhookSecret != null && !webhookSecret.isBlank();
     }
 }

@@ -11,6 +11,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.List;
+import java.util.Optional;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -35,12 +37,15 @@ import com.core.util.PaymentUtil;
 import com.razorpay.Order;
 import com.razorpay.QrCode;
 import com.razorpay.RazorpayClient;
+import com.razorpay.Refund;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @Transactional
 @RequiredArgsConstructor
+@Slf4j
 public class RazorpayPaymentService {
 
 	private final RazorpayClientFactory razorpayClientFactory;
@@ -122,28 +127,85 @@ public class RazorpayPaymentService {
 				.orElse(null);
 
 		if (reusable != null) {
-			String clientNameReuse = booking.getClient() != null && booking.getClient().getName() != null
-					? booking.getClient().getName().getDisplayName()
-					: null;
-			String clientPhoneReuse = booking.getClient() != null ? booking.getClient().getPhone() : null;
-			String clientEmailReuse = booking.getClient() != null ? booking.getClient().getEmail() : null;
 
-			long reusedAmountInPaise = reusable.getReceivedAmount().getAmount()
-					.setScale(2, RoundingMode.HALF_UP)
-					.multiply(BigDecimal.valueOf(100))
-					.longValueExact();
+			/*
+			 * P1B/1D -- the local INITIATED status alone is not proof this order
+			 * is still safe to reuse: if Razorpay already captured it and our own
+			 * /verify call for it was lost (the exact recovery scenario this
+			 * change exists for), handing the SAME order id back to Razorpay
+			 * Checkout would offer to pay an already-paid order again. One extra
+			 * live lookup here -- order creation is not a hot path -- mirrors
+			 * PublicEstimateService's existing equivalent check for the Estimate
+			 * flow. Never create a second order while Razorpay's state can't be
+			 * established either: that would risk a duplicate charge.
+			 */
+			Order existingOrder;
 
-			return RazorpayCheckoutPayload.builder()
-					.key(credentials.keyId())
-					.orderId(reusable.getGatewayOrderId())
-					.amount(reusedAmountInPaise)
-					.currency(credentials.resolvedCurrency())
-					.prefill(RazorpayCheckoutPayload.Prefill.builder()
-							.name(clientNameReuse)
-							.contact(clientPhoneReuse)
-							.email(clientEmailReuse)
-							.build())
-					.build();
+			try {
+				existingOrder = razorpayClient.orders.fetch(reusable.getGatewayOrderId());
+			} catch (Exception exception) {
+				throw new IllegalStateException(
+						"Unable to verify the existing Razorpay order before reuse. Please retry shortly.", exception);
+			}
+
+			/*
+			 * Explicit <String> witness, not String.valueOf(existingOrder.get(...)):
+			 * get() is generic (<T> T get(String)), and String.valueOf is
+			 * overloaded with a char[] variant -- without a witness, javac can
+			 * resolve the more specific valueOf(char[]) overload and infer
+			 * T=char[] for get(), which then throws a ClassCastException at
+			 * runtime casting the real String value to char[].
+			 */
+			String orderStatusRaw = existingOrder.<String>get("status");
+			String orderStatus = orderStatusRaw == null
+					? ""
+					: orderStatusRaw.trim().toLowerCase(java.util.Locale.ROOT);
+
+			if ("paid".equals(orderStatus)) {
+				/*
+				 * Do not reconcile inline here: this method is already inside the
+				 * booking-row transaction and about to throw, which would roll
+				 * back any confirmation written in the same transaction. The
+				 * webhook and CheckoutPaymentReconciliationJob (running at most a
+				 * few minutes behind) independently close this out shortly --
+				 * this check's job is only to guarantee we never hand back an
+				 * already-paid order, not to perform the recovery itself.
+				 */
+				throw new IllegalStateException(
+						"Payment for this booking is already completed and is being confirmed. Please refresh shortly.");
+			}
+
+			if ("created".equals(orderStatus) || "attempted".equals(orderStatus)) {
+
+				String clientNameReuse = booking.getClient() != null && booking.getClient().getName() != null
+						? booking.getClient().getName().getDisplayName()
+						: null;
+				String clientPhoneReuse = booking.getClient() != null ? booking.getClient().getPhone() : null;
+				String clientEmailReuse = booking.getClient() != null ? booking.getClient().getEmail() : null;
+
+				long reusedAmountInPaise = reusable.getReceivedAmount().getAmount()
+						.setScale(2, RoundingMode.HALF_UP)
+						.multiply(BigDecimal.valueOf(100))
+						.longValueExact();
+
+				return RazorpayCheckoutPayload.builder()
+						.key(credentials.keyId())
+						.orderId(reusable.getGatewayOrderId())
+						.amount(reusedAmountInPaise)
+						.currency(credentials.resolvedCurrency())
+						.prefill(RazorpayCheckoutPayload.Prefill.builder()
+								.name(clientNameReuse)
+								.contact(clientPhoneReuse)
+								.email(clientEmailReuse)
+								.build())
+						.build();
+			}
+
+			/*
+			 * Any other Razorpay order status is not safely reusable -- fall
+			 * through to creating a fresh order below, same as if no local
+			 * reuse candidate had been found at all.
+			 */
 		}
 
 		long amountInPaise = pending.getAmount()
@@ -264,11 +326,35 @@ public class RazorpayPaymentService {
 
 		String method = razorpayPayment.get("method");
 
-		payment.setGatewayPaymentId(paymentId);
+		applyConfirmationAndNotify(
+				payment, booking, orgId, bookingId,
+				paymentId, signature, PaymentUtil.mapPaymentMode(method), Instant.now());
+	}
+
+	/*
+	 * Shared tail for every path that turns a locked, INITIATED (or previously
+	 * FAILED -- see reconcileByGatewayOrderId) Payment into CONFIRMED: sets the
+	 * gateway fields, saves, publishes PaymentConfirmedEvent and, if the
+	 * booking is still DRAFT, confirms it. Used by verifyPayment (browser,
+	 * signature-verified) and reconcileByGatewayOrderId (webhook/scheduled recovery,
+	 * provider-verified) so both paths behave identically once a payment is
+	 * proven captured -- there is exactly one place this transition happens.
+	 */
+	private void applyConfirmationAndNotify(
+			Payment payment,
+			Booking booking,
+			String orgId,
+			String bookingId,
+			String gatewayPaymentId,
+			String signature,
+			PaymentMode paymentMode,
+			Instant transactionDate
+	) {
+		payment.setGatewayPaymentId(gatewayPaymentId);
 		payment.setGatewaySignature(signature);
-		payment.setTransactionNumber(paymentId);
-		payment.setTransactionDate(Instant.now());
-		payment.setPaymentMode(PaymentUtil.mapPaymentMode(method));
+		payment.setTransactionNumber(gatewayPaymentId);
+		payment.setTransactionDate(transactionDate);
+		payment.setPaymentMode(paymentMode);
 		payment.setStatus(PaymentStatus.CONFIRMED);
 
 		Payment saved = paymentRepo.save(payment);
@@ -279,6 +365,166 @@ public class RazorpayPaymentService {
 		if (booking.getStatus() == BookingStatus.DRAFT) {
 			clientBookingService.confirmBooking(orgId, bookingId);
 		}
+	}
+
+	/* ================= RECOVERY (webhook + scheduled reconciliation) ================= */
+
+	/*
+	 * Public entry point for RazorpayWebhookService and
+	 * CheckoutPaymentReconciliationJob: given an orderId we already created
+	 * and stored locally, independently ask Razorpay for that order's current
+	 * state and payments, and confirm the matching local Payment only if the
+	 * provider genuinely proves it -- never because a webhook payload or a
+	 * bare payment id said so.
+	 *
+	 * orgId must be resolved by the CALLER from a trustworthy source (the
+	 * local Payment row for the job; the webhook URL path -- fixed dashboard
+	 * configuration, not request payload -- for the webhook). It is checked
+	 * against the payment's own stored orgId BEFORE any Razorpay API call is
+	 * made using it: an org can never use its own (correctly-signed) webhook
+	 * to trigger a live provider lookup, let alone a confirmation, for an
+	 * orderId that resolves to a different org's payment.
+	 */
+	public void reconcileByGatewayOrderId(String orgId, String gatewayOrderId) throws Exception {
+
+		/*
+		 * PESSIMISTIC_WRITE on the payment row -- identical lock verifyPayment
+		 * takes, so a browser /verify call, a webhook delivery (including a
+		 * duplicate/retried delivery) and this scheduled job can never confirm
+		 * the same order twice: whichever transaction gets the lock first
+		 * commits CONFIRMED, and every other one then sees CONFIRMED under the
+		 * idempotency check below and safely no-ops. This is a real database
+		 * row lock, so it serializes correctly across multiple application
+		 * instances too -- no separate distributed lock is needed.
+		 */
+		Payment payment = paymentRepo.lockByGatewayOrderId(gatewayOrderId).orElse(null);
+
+		if (payment == null) {
+			log.warn("Razorpay reconciliation: no local payment found for order {}", gatewayOrderId);
+			return;
+		}
+
+		if (!orgId.equals(payment.getOrgId())) {
+			throw new SecurityException("Payment organization mismatch");
+		}
+
+		if (payment.getStatus() == PaymentStatus.CONFIRMED) {
+			return;
+		}
+
+		/*
+		 * Only ever recover an order that is still open (INITIATED) or one our
+		 * own bounded reconciliation previously gave up on (FAILED -- see
+		 * CheckoutPaymentReconciliationJob's expiry handling). A late webhook
+		 * for a payment we already marked FAILED after its grace window is
+		 * exactly the case that mechanism exists for. Never touch REFUNDED or
+		 * CANCELLED -- those are explicit, immutable outcomes.
+		 */
+		if (payment.getStatus() != PaymentStatus.INITIATED && payment.getStatus() != PaymentStatus.FAILED) {
+			log.warn("Razorpay reconciliation: payment {} for order {} is in terminal status {} -- not recoverable",
+					payment.getId(), gatewayOrderId, payment.getStatus());
+			return;
+		}
+
+		Booking booking = payment.getBooking();
+
+		if (booking == null) {
+			log.warn("Razorpay reconciliation: payment {} for order {} has no booking -- skipping", payment.getId(), gatewayOrderId);
+			return;
+		}
+
+		long expectedAmount = toSubunits(payment.getReceivedAmount().getAmount());
+		String expectedCurrency = payment.getReceivedAmount().getCurrency().name();
+
+		/*
+		 * Only now -- after confirming this order genuinely belongs to orgId --
+		 * do we resolve that org's credentials and call out to Razorpay. This
+		 * ordering matters: a caller could otherwise cause a live provider call
+		 * to be made with one org's credentials for an orderId that turns out to
+		 * belong to a different org, before the mismatch is ever detected.
+		 */
+		RazorpayCredentials credentials = razorpayClientFactory.credentials(orgId);
+		RazorpayClient razorpayClient = razorpayClientFactory.client(credentials);
+
+		Order order = razorpayClient.orders.fetch(gatewayOrderId);
+
+		RazorpayPaymentValidation.validateOrderIdentity(order, gatewayOrderId, expectedAmount, expectedCurrency);
+
+		List<com.razorpay.Payment> candidatePayments = razorpayClient.orders.fetchPayments(gatewayOrderId);
+
+		for (com.razorpay.Payment candidate : candidatePayments) {
+
+			if (!RazorpayPaymentValidation.isCaptured(candidate)) {
+				continue;
+			}
+
+			try {
+				RazorpayPaymentValidation.validatePaymentIdentity(candidate, gatewayOrderId, expectedAmount, expectedCurrency);
+			} catch (IllegalStateException mismatch) {
+				log.warn("Razorpay reconciliation: candidate payment on order {} failed identity validation: {}",
+						gatewayOrderId, mismatch.getMessage());
+				continue;
+			}
+
+			String candidatePaymentId = candidate.<String>get("id");
+
+			if (candidatePaymentId == null || candidatePaymentId.isBlank()) {
+				continue;
+			}
+
+			if (paymentRepo.existsByGatewayPaymentIdAndIdNot(candidatePaymentId, payment.getId())) {
+				log.warn("Razorpay reconciliation: payment {} is already linked to a different local payment -- refusing to confirm {}",
+						candidatePaymentId, payment.getId());
+				continue;
+			}
+
+			String method = candidate.get("method");
+			Object createdAtRaw = candidate.get("created_at");
+			Instant transactionDate = createdAtRaw instanceof Number number
+					? Instant.ofEpochSecond(number.longValue())
+					: Instant.now();
+
+			applyConfirmationAndNotify(
+					payment, booking, orgId, booking.getBookingId(),
+					candidatePaymentId, null, PaymentUtil.mapPaymentMode(method), transactionDate);
+
+			log.info("Razorpay reconciliation: recovered payment {} (order {}) via provider lookup", payment.getId(), gatewayOrderId);
+			return;
+		}
+
+		log.info("Razorpay reconciliation: no captured payment found yet for order {} (payment {})", gatewayOrderId, payment.getId());
+	}
+
+	/*
+	 * Called by CheckoutPaymentReconciliationJob after a reconcileByGatewayOrderId
+	 * attempt found nothing captured -- stops the job from polling a genuinely
+	 * abandoned checkout attempt forever. FAILED here is not permanent: a late
+	 * webhook delivery can still recover it (see reconcileByGatewayOrderId, which
+	 * accepts FAILED as a recoverable starting status). Re-locks fresh rather
+     * than trusting an in-memory Payment the caller already holds, since a
+	 * concurrent confirmation may have just happened.
+	 */
+	public void expireIfStillInitiatedPastGracePeriod(String gatewayOrderId, Instant graceDeadline) {
+		Payment payment = paymentRepo.lockByGatewayOrderId(gatewayOrderId).orElse(null);
+
+		if (payment == null || payment.getStatus() != PaymentStatus.INITIATED) {
+			return;
+		}
+
+		if (payment.getExpiresAt() == null || !payment.getExpiresAt().isBefore(graceDeadline)) {
+			return;
+		}
+
+		payment.setStatus(PaymentStatus.FAILED);
+		payment.setRemarks("No captured Razorpay payment found for this order within the recovery window");
+		paymentRepo.save(payment);
+
+		log.info("Checkout payment {} (order {}) marked FAILED after expiry grace period with no captured payment found",
+				payment.getId(), gatewayOrderId);
+	}
+
+	private long toSubunits(BigDecimal amount) {
+		return amount.setScale(2, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100)).longValueExact();
 	}
 
 	/* ================= REFUND (admin-approved only -- see RefundRequestService) ================= */
@@ -319,15 +565,74 @@ public class RazorpayPaymentService {
 		notes.put("bookingId", bookingId);
 		refundRequest.put("notes", notes);
 
-		com.razorpay.Refund refund = razorpayClient.payments.refund(
-				confirmedPayment.getGatewayPaymentId(), refundRequest);
+		/*
+		 * P1H -- provider-side idempotency check before issuing a new refund.
+		 * If a prior approve() attempt already refunded this exact amount at
+		 * Razorpay but failed to persist that locally (see the catch block
+		 * below), a retry must find and reuse that refund rather than issuing a
+		 * second real one. Financial correctness is worth the extra API call
+		 * here even though this path is invoked far less often than checkout.
+		 */
+		String refundId = findExistingRefund(razorpayClient, confirmedPayment.getGatewayPaymentId(), amountInPaise)
+				.orElse(null);
 
-		String refundId = refund.get("id");
+		if (refundId != null) {
+			log.warn("Reusing existing Razorpay refund {} for payment {} instead of issuing a duplicate",
+					refundId, confirmedPayment.getId());
+		} else {
+			Refund refund = razorpayClient.payments.refund(
+					confirmedPayment.getGatewayPaymentId(), refundRequest);
 
-		confirmedPayment.setStatus(PaymentStatus.REFUNDED);
-		paymentRepo.save(confirmedPayment);
+			refundId = refund.get("id");
+		}
+
+		try {
+			confirmedPayment.setStatus(PaymentStatus.REFUNDED);
+			paymentRepo.save(confirmedPayment);
+		} catch (Exception persistenceFailure) {
+			/*
+			 * The Razorpay refund itself is done -- real money has moved. Never
+			 * swallow that fact into a generic failure a human could read as
+			 * "nothing happened, safe to try another way"; surface the refund id
+			 * so RefundRequestService.approve can record it even while marking
+			 * the request as needing verification, not simply FAILED.
+			 */
+			log.error("Razorpay refund {} succeeded for payment {} but local persistence failed -- "
+					+ "manual reconciliation required", refundId, confirmedPayment.getId(), persistenceFailure);
+			throw new RefundPersistenceException(refundId, persistenceFailure);
+		}
 
 		return refundId;
+	}
+
+	/*
+	 * Matches by gatewayPaymentId + exact refunded amount -- the strongest
+	 * identifiers available without a client-generated idempotency key.
+	 * RefundRequestService never issues more than one RefundRequest per
+	 * cancellation and cancellation is a one-time transition (see
+	 * BookingService.cancelBooking's CANCELLED guard), so a legitimate second,
+	 * independently-intended refund of the identical amount on the same
+	 * payment is not a realistic case this flow can produce today.
+	 */
+	private Optional<String> findExistingRefund(RazorpayClient razorpayClient, String gatewayPaymentId, long amountInPaise)
+			throws Exception {
+
+		List<Refund> existingRefunds = razorpayClient.payments.fetchAllRefunds(gatewayPaymentId);
+
+		if (existingRefunds == null) {
+			return Optional.empty();
+		}
+
+		for (Refund existing : existingRefunds) {
+			Object amount = existing.get("amount");
+
+			if (amount instanceof Number number && number.longValue() == amountInPaise) {
+				String existingRefundId = existing.<String>get("id");
+				return Optional.ofNullable(existingRefundId);
+			}
+		}
+
+		return Optional.empty();
 	}
 
 	/* ================= AMOUNT ================= */

@@ -58,7 +58,8 @@ public class RazorpayClientFactory {
                 config.displayName(),
                 config.checkoutEnabled(),
                 config.qrEnabled(),
-                config.autoCapture()
+                config.autoCapture(),
+                config.webhookSecret()
         );
     }
 
@@ -109,6 +110,45 @@ public class RazorpayClientFactory {
 
         if (!expected.equals(signature)) {
             throw new SecurityException("Invalid Razorpay signature");
+        }
+    }
+
+    /*
+     * Razorpay webhook signature: HMAC-SHA256 of the exact raw request body
+     * using the per-org webhook secret configured in the Razorpay dashboard
+     * (see PaymentGatewayConfig.webhookSecretEncrypted), hex-encoded, sent in
+     * the X-Razorpay-Signature header. Must run against the raw bytes actually
+     * received -- re-serializing the parsed JSON before hashing would silently
+     * break verification for a byte-for-byte-different-but-semantically-equal
+     * body, which is why the webhook controller binds the request as a raw
+     * String rather than a parsed DTO.
+     */
+    public void verifyWebhookSignature(
+            RazorpayCredentials credentials,
+            String rawBody,
+            String signature
+    ) throws Exception {
+
+        if (!hasText(rawBody) || !hasText(signature)) {
+            throw new SecurityException("Invalid Razorpay webhook request");
+        }
+
+        if (!credentials.hasWebhookSecret()) {
+            throw new SecurityException("Razorpay webhook secret is not configured for this organization");
+        }
+
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(
+                credentials.webhookSecret().getBytes(StandardCharsets.UTF_8),
+                "HmacSHA256"
+        ));
+
+        byte[] expected = HexFormat.of().formatHex(
+                mac.doFinal(rawBody.getBytes(StandardCharsets.UTF_8))
+        ).getBytes(StandardCharsets.UTF_8);
+
+        if (!java.security.MessageDigest.isEqual(expected, signature.getBytes(StandardCharsets.UTF_8))) {
+            throw new SecurityException("Invalid Razorpay webhook signature");
         }
     }
 

@@ -13,6 +13,7 @@ import com.core.events.assembler.RefundEventAssembler;
 import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
 import com.core.gateway.razerpay.RazorpayPaymentService;
+import com.core.gateway.razerpay.RefundPersistenceException;
 import com.core.models.Booking;
 import com.core.models.RefundRequest;
 import com.core.models.enums.RefundRequestStatus;
@@ -112,6 +113,27 @@ public class RefundRequestService {
 			publishRefundCompleted(orgId, request);
 
 			return request;
+		} catch (RefundPersistenceException ex) {
+			/*
+			 * P1H -- the Razorpay refund itself succeeded (we have a real
+			 * gatewayRefundId); only recording it locally failed. Never mark
+			 * this plain FAILED: FAILED elsewhere on this class means "nothing
+			 * happened", and this request can never pass the PENDING_REVIEW
+			 * guard again to be re-approved, so preserving the refund id here is
+			 * what lets anyone reviewing this row later see money already moved
+			 * instead of assuming it's safe to refund through another channel.
+			 */
+			request.setStatus(RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION);
+			request.setGatewayRefundId(ex.getRefundId());
+			request.setFailureReason(ex.getMessage());
+			request.setReviewedBy(reviewedBy);
+			request.setReviewedAt(Instant.now());
+
+			refundRequestRepository.save(request);
+
+			throw new BusinessException(ErrorCode.REFUND_FAILED,
+					"Refund was processed by Razorpay (refund id " + ex.getRefundId()
+							+ ") but could not be fully recorded. This request now requires manual verification.");
 		} catch (Exception ex) {
 			request.setStatus(RefundRequestStatus.FAILED);
 			request.setFailureReason(ex.getMessage());

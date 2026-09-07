@@ -166,6 +166,28 @@ class RefundRequestServiceTest {
 		verify(eventPublisher, never()).publishEvent(any());
 	}
 
+	/*
+	 * P1H -- when the Razorpay refund itself succeeded but only local
+	 * persistence failed (RazorpayPaymentService.refundPayment surfaces this as
+	 * RefundPersistenceException carrying the real refund id), this must never
+	 * be recorded as plain FAILED: FAILED elsewhere means "nothing happened,
+	 * safe to reconsider", and conflating the two could lead someone reviewing
+	 * this row to believe no refund occurred when one actually did.
+	 */
+	@Test
+	void approve_refundPersistenceFailure_marksCompletedNeedsVerification_preservingRefundId() throws Exception {
+		RefundRequest request = pendingRequest(new BigDecimal("500.00"));
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, ORG_ID)).thenReturn(Optional.of(request));
+		when(razorpayPaymentService.refundPayment(ORG_ID, BOOKING_ID, new BigDecimal("500.00")))
+				.thenThrow(new com.core.gateway.razerpay.RefundPersistenceException("rfnd_real", new RuntimeException("db down")));
+
+		assertThrows(BusinessException.class, () -> service.approve(REQUEST_ID, ORG_ID, REVIEWER));
+
+		assertEquals(RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION, request.getStatus());
+		assertEquals("rfnd_real", request.getGatewayRefundId());
+		verify(eventPublisher, never()).publishEvent(any());
+	}
+
 	@Test
 	void reject_locksTheRow_notPlainFind() {
 		RefundRequest request = pendingRequest(new BigDecimal("500.00"));

@@ -123,4 +123,20 @@ public interface PaymentRepository
 			PaymentStatus status,
 			PaymentGateway gateway,
 			Instant expiresAt);
+
+	/*
+	 * Booking-checkout payments (ClientPaymentController -> createRazorpayOrder)
+	 * are the only Razorpay/INITIATED payments with both booking set AND
+	 * collectionContext null: driver-duty QR payments always set
+	 * collectionContext="DRIVER_DUTY_QR" (see generateQR), and Estimate checkout
+	 * payments never set booking at all (they set estimate instead -- see
+	 * PublicEstimateService). No schema change/backfill needed: every existing
+	 * row already satisfies this discriminator by construction. createdAt bound
+	 * keeps CheckoutPaymentReconciliationJob from polling genuinely ancient,
+	 * long-abandoned rows forever.
+	 */
+	List<Payment> findAllByGatewayAndStatusAndBookingIsNotNullAndCollectionContextIsNullAndCreatedAtAfter(
+			PaymentGateway gateway,
+			PaymentStatus status,
+			Instant createdAtAfter);
 }
