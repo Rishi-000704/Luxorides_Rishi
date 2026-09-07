@@ -2,6 +2,7 @@ package com.core.config;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationProvider;
@@ -21,11 +22,14 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfiguration {
 	private final AuthenticationProvider authenticationProvider;
 	private final JwtAuthenticationFilter jwtAuthenticationFilter;
+	private final List<String> corsAllowedOrigins;
 
 	public SecurityConfiguration(JwtAuthenticationFilter jwtAuthenticationFilter,
-			AuthenticationProvider authenticationProvider) {
+			AuthenticationProvider authenticationProvider,
+			@Value("${cors.allowed-origins}") String corsAllowedOrigins) {
 		this.authenticationProvider = authenticationProvider;
 		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+		this.corsAllowedOrigins = CorsOrigins.parse(corsAllowedOrigins);
 	}
 
 	@Bean
@@ -47,8 +51,10 @@ public class SecurityConfiguration {
 	CorsConfigurationSource corsConfigurationSource() {
 		CorsConfiguration configuration = new CorsConfiguration();
 
-		// Allow all origins for development purposes; restrict in production
-		configuration.setAllowedOriginPatterns(List.of("*"));
+		// Exact allowed origins, environment-driven via cors.allowed-origins
+		// -- no wildcard, no origin patterns, no subdomain matching. See
+		// CorsOrigins for the shared parsing WebSocketConfig also uses.
+		configuration.setAllowedOrigins(corsAllowedOrigins);
 
 		configuration.setExposedHeaders(
 				List.of(RequestTraceFilter.TRACE_ID_HEADER)
@@ -60,8 +66,11 @@ public class SecurityConfiguration {
 		// Allow all headers
 		configuration.setAllowedHeaders(List.of("*"));
 
-		// Allow credentials (set to false if you don't need credentials like cookies)
-		configuration.setAllowCredentials(true);
+		// Customer and Fleetovo authenticate exclusively via a Bearer JWT in
+		// the Authorization header; neither relies on cookies, and this
+		// backend never sets or reads a cookie anywhere -- so credentialed
+		// CORS isn't needed here.
+		configuration.setAllowCredentials(false);
 
 		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 
