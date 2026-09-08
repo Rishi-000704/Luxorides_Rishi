@@ -65,6 +65,24 @@ import lombok.Setter;
  *   SELECT gateway_payment_id, COUNT(*) FROM payment WHERE gateway_payment_id IS NOT NULL GROUP BY gateway_payment_id HAVING COUNT(*) > 1;
  * and resolve any hits manually first.
  */
+/*
+ * uk_payment_cash_collection_reference -- DB-level backstop for "at most one
+ * confirmed cash payment per duty" (see ExternalDriverDutyService.
+ * confirmCashPayment). The entry-row PESSIMISTIC_WRITE lock taken before the
+ * existence-check-then-insert already closes the concurrent-retry race by
+ * itself (unlike the gatewayPaymentId case below, this one IS lock-protected
+ * end to end) -- this constraint is deliberate defense-in-depth, matching
+ * this codebase's existing standard of never relying on the application
+ * check alone for a financially-significant uniqueness invariant. Deliberately
+ * a NEW, separate column rather than reusing gatewayOrderId/collectionContextId:
+ * a composite unique constraint on (collection_context, collection_context_id)
+ * would also apply to DRIVER_DUTY_QR rows, which legitimately span multiple
+ * Payment rows over time (an expired QR attempt followed by a fresh one) --
+ * that would break the existing QR flow. This column is populated ONLY for
+ * cash payments (set to the dutyId), NULL for every other payment, and MySQL/
+ * InnoDB unique indexes treat every NULL as distinct (same safety property
+ * already relied on below for gatewayOrderId/gatewayPaymentId).
+ */
 @Table(name = "payment", indexes = {
 		@Index(name = "idx_payment_booking", columnList = "booking_id"),
 		@Index(name = "idx_payment_invoice", columnList = "invoice_id"),
@@ -72,7 +90,8 @@ import lombok.Setter;
 		@Index(name = "idx_payment_reconciliation", columnList = "collection_context, status, gateway, expires_at")
 }, uniqueConstraints = {
 		@UniqueConstraint(name = "uk_payment_gateway_order_id", columnNames = "gateway_order_id"),
-		@UniqueConstraint(name = "uk_payment_gateway_payment_id", columnNames = "gateway_payment_id")
+		@UniqueConstraint(name = "uk_payment_gateway_payment_id", columnNames = "gateway_payment_id"),
+		@UniqueConstraint(name = "uk_payment_cash_collection_reference", columnNames = "cash_collection_reference")
 })
 public class Payment extends AuditableEntity {
 
@@ -161,4 +180,13 @@ public class Payment extends AuditableEntity {
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 20)
 	private PaymentStatus status;
+
+	/*
+	 * Set only for driver-collected cash payments (value = the dutyId the
+	 * cash was collected against) -- see the class-level comment on
+	 * uk_payment_cash_collection_reference above. Always null for every
+	 * other payment.
+	 */
+	@Column(name = "cash_collection_reference", length = 80)
+	private String cashCollectionReference;
 }

@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import com.core.dtos.driverduty.DutyRouteLegResponse;
+import com.core.events.assembler.PaymentEventAssembler;
 import com.core.exception.BusinessException;
 import com.core.gateway.mock.MockPaymentService;
 import com.core.gateway.razerpay.RazorpayPaymentService;
@@ -33,6 +34,7 @@ import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.DriverDutyLiveLocationRepository;
+import com.core.repositories.PaymentRepository;
 import com.core.services.common.FileService;
 import com.core.services.common.SMSService;
 import com.core.ws.DutyLocationChannelRegistry;
@@ -80,7 +82,9 @@ class ExternalDriverDutyServiceRouteTest {
 				new BCryptPasswordEncoder(),
 				mock(SMSService.class),
 				locationService,
-				mock(ObjectProvider.class)
+				mock(ObjectProvider.class),
+				mock(PaymentRepository.class),
+				mock(PaymentEventAssembler.class)
 		);
 	}
 

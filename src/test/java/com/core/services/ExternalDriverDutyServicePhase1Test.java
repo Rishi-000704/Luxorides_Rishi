@@ -25,6 +25,7 @@ import com.core.dtos.driverduty.GarageReturnConfirmationResponse;
 import com.core.dtos.driverduty.PickupOtpGenerateResponse;
 import com.core.dtos.driverduty.PickupOtpVerifyRequest;
 import com.core.dtos.driverduty.PickupOtpVerifyResponse;
+import com.core.events.assembler.PaymentEventAssembler;
 import com.core.exception.BusinessException;
 import com.core.gateway.mock.MockPaymentService;
 import com.core.gateway.razerpay.RazorpayPaymentService;
@@ -42,6 +43,7 @@ import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.DriverDutyLiveLocationRepository;
+import com.core.repositories.PaymentRepository;
 import com.core.services.common.FileService;
 import com.core.services.common.SMSService;
 import com.core.ws.DutyLocationChannelRegistry;
@@ -94,7 +96,9 @@ class ExternalDriverDutyServicePhase1Test {
 				new BCryptPasswordEncoder(),
 				smsService,
 				mock(LocationService.class),
-				mock(ObjectProvider.class)
+				mock(ObjectProvider.class),
+				mock(PaymentRepository.class),
+				mock(PaymentEventAssembler.class)
 		);
 
 		when(smsService.sendOtp(anyString(), anyString(), anyString(), anyString())).thenReturn(true);

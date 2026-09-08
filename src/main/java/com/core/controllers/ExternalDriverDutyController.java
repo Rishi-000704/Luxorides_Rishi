@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.core.dtos.driverduty.CashPaymentConfirmationResponse;
 import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
@@ -59,6 +60,20 @@ public class ExternalDriverDutyController {
 	@GetMapping("/{token}/payment-status")
 	public QrPaymentStatusResponse checkQrPaymentStatus(@PathVariable String token) {
 		return externalDriverDutyService.checkQrPaymentStatus(token);
+	}
+
+	/*
+	 * No request body -- the client submits nothing for this endpoint to
+	 * trust. The authoritative outstanding amount is derived entirely
+	 * server-side from the duty's own booking/payment state.
+	 */
+	@PostMapping("/{token}/cash/confirm")
+	public CashPaymentConfirmationResponse confirmCashPayment(
+			@PathVariable String token,
+			HttpServletRequest request,
+			@RequestHeader(value = "User-Agent", required = false) String userAgent
+	) {
+		return externalDriverDutyService.confirmCashPayment(token, getClientIp(request), userAgent);
 	}
 
 	@GetMapping("/{token}/route/{leg}")

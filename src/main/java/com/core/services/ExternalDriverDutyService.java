@@ -15,11 +15,13 @@ import java.util.Set;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.core.dtos.driverduty.CashPaymentConfirmationResponse;
 import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
@@ -41,6 +43,8 @@ import com.core.dtos.driverduty.PickupOtpVerifyRequest;
 import com.core.dtos.driverduty.PickupOtpVerifyResponse;
 import com.core.dtos.driverduty.ReturnRouteEstimate;
 import com.core.events.DutyStartedEvent;
+import com.core.events.PaymentConfirmedEvent;
+import com.core.events.assembler.PaymentEventAssembler;
 import com.core.exception.BusinessException;
 import com.core.exception.ErrorCode;
 import com.core.exception.NotFoundException;
@@ -58,6 +62,7 @@ import com.core.models.DriverDutyCheckpoint;
 import com.core.models.DriverDutyExpense;
 import com.core.models.DriverDutyLiveLocation;
 import com.core.models.ExtraCharge;
+import com.core.models.Payment;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.embedded.GstSnapshot;
 import com.core.models.embedded.Money;
@@ -69,6 +74,7 @@ import com.core.models.enums.DriverDutyExpenseType;
 import com.core.models.enums.DriverDutyTokenStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.models.enums.PaymentGateway;
+import com.core.models.enums.PaymentMode;
 import com.core.models.enums.PaymentStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.BookingRepository;
@@ -76,6 +82,7 @@ import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.DriverDutyLiveLocationRepository;
+import com.core.repositories.PaymentRepository;
 import com.core.services.common.FileService;
 import com.core.services.common.SMSService;
 import com.core.util.BookingUtil;
@@ -128,7 +135,19 @@ public class ExternalDriverDutyService {
 	 */
 	private final ObjectProvider<ExternalDriverDutyService> self;
 
+	/*
+	 * Appended after `self` deliberately -- Lombok's @RequiredArgsConstructor
+	 * generates the constructor in field-declaration order, so adding these
+	 * at the END keeps every existing positional constructor call (see
+	 * ExternalDriverDutyServicePhase1Test / ExternalDriverDutyServiceRouteTest)
+	 * a pure append, not a reordering.
+	 */
+	private final PaymentRepository paymentRepo;
+	private final PaymentEventAssembler paymentEventAssembler;
+
 	private String driverDutyPublicUrl = "https://sandbox.fleetovo.com/extrenal";
+
+	private static final String DRIVER_DUTY_CASH_CONTEXT = "DRIVER_DUTY_CASH";
 
 	/*
 	 * =========================================================
@@ -859,6 +878,22 @@ public class ExternalDriverDutyService {
 
 		DriverDutyAccessToken accessToken = tokenValidator.resolveTokenForPaymentStatus(rawToken);
 		BookingEntry entry = accessToken.getBookingEntry();
+		Booking booking = entry.getBooking();
+
+		/*
+		 * Booking-level settlement check first -- covers a payment confirmed
+		 * through a different flow than QR (cash, most notably), so a driver
+		 * who chose Cash Received but the app restarted before navigating
+		 * away sees "paid" here on resume (this is the screen
+		 * reconcileActiveDuty's resume path lands on). Deliberately generic
+		 * ("is the outstanding amount covered by ANY confirmed payment"),
+		 * not cash-specific, and deliberately placed here rather than inside
+		 * isPaidByQR/mockQrStatus themselves -- those stay untouched,
+		 * QR-only, zero risk to existing digital-payment behavior.
+		 */
+		if (calculatePendingAmount(booking).compareTo(BigDecimal.ZERO) <= 0) {
+			return buildSettledPaymentStatus(booking);
+		}
 
 		try {
 			boolean mockGateway = resolveEffectiveGateway(accessToken.getOrgId()) == PaymentGateway.MOCK;
@@ -866,12 +901,12 @@ public class ExternalDriverDutyService {
 			return mockGateway
 					? mockPaymentService.mockQrStatus(
 							accessToken.getOrgId(),
-							entry.getBooking().getBookingId(),
+							booking.getBookingId(),
 							entry.getDutyId()
 					)
 					: razorpayPaymentService.isPaidByQR(
 							accessToken.getOrgId(),
-							entry.getBooking().getBookingId(),
+							booking.getBookingId(),
 							entry.getDutyId()
 					);
 		} catch (Exception ex) {
@@ -884,6 +919,141 @@ public class ExternalDriverDutyService {
 					.message("Unable to verify payment right now")
 					.build();
 		}
+	}
+
+	private QrPaymentStatusResponse buildSettledPaymentStatus(Booking booking) {
+		Payment latestConfirmed = booking.getPayments() == null
+				? null
+				: booking.getPayments().stream()
+						.filter(p -> p.getStatus() == PaymentStatus.CONFIRMED)
+						.max(java.util.Comparator.comparing(
+								Payment::getTransactionDate,
+								java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+						.orElse(null);
+
+		return QrPaymentStatusResponse.builder()
+				.status("PAID")
+				.paid(true)
+				.amount(latestConfirmed != null
+						? latestConfirmed.getReceivedAmount().getAmount()
+						: booking.getTotal().getAmount())
+				.paymentId(latestConfirmed != null ? latestConfirmed.getId() : null)
+				.paidAt(latestConfirmed != null ? latestConfirmed.getTransactionDate() : null)
+				.message("Payment received")
+				.build();
+	}
+
+	/*
+	 * =========================================================
+	 * CASH PAYMENT (driver-collected)
+	 * =========================================================
+	 * The backend-authoritative counterpart to the QR flow above -- a driver
+	 * taps "Cash Received" only after physically collecting payment, and this
+	 * records that as a real, CONFIRMED Payment row using the existing
+	 * Payment model (PaymentMode.CASH, PaymentGateway.MANUAL_ENTRY), never a
+	 * second parallel ledger. The amount is always the backend's own
+	 * calculatePendingAmount at confirmation time -- the client submits
+	 * nothing for this endpoint to trust.
+	 */
+	@Transactional
+	public CashPaymentConfirmationResponse confirmCashPayment(String rawToken, String ipAddress, String userAgent) {
+
+		DriverDutyAccessToken accessToken = tokenValidator.resolveTokenForPaymentStatus(rawToken);
+
+		/*
+		 * Same lock lockEntryForDutyExecution already uses for every other
+		 * duty-execution write (org-scoped find, then PESSIMISTIC_WRITE by
+		 * id) -- this is what makes the existence-check-then-insert below
+		 * atomic with respect to a double-tap or a lost-response retry: a
+		 * second concurrent call for the SAME dutyId blocks here until the
+		 * first commits, and by then its own existence check (below) finds
+		 * the row the first call just created.
+		 */
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.COMPLETED) {
+			throw new BusinessException(
+					ErrorCode.INVALID_DUTY_STATUS,
+					"Duty must be completed before cash payment can be recorded (status: " + entry.getStatus() + ")"
+			);
+		}
+
+		Booking booking = entry.getBooking();
+		String orgId = accessToken.getOrgId();
+		String bookingId = booking.getBookingId();
+		String dutyId = entry.getDutyId();
+
+		Payment existing = paymentRepo
+				.findFirstByOrgIdAndBooking_BookingIdAndCollectionContextAndCollectionContextIdOrderByCreatedAtDesc(
+						orgId, bookingId, DRIVER_DUTY_CASH_CONTEXT, dutyId)
+				.orElse(null);
+
+		if (existing != null) {
+			return toCashConfirmationResponse(existing, "Cash payment already recorded");
+		}
+
+		/*
+		 * Never trust a client-submitted amount -- there isn't one to trust
+		 * in the first place, this endpoint accepts no request body. The
+		 * authoritative payable amount is derived exactly the way
+		 * submitEnd's QR generation already derives it.
+		 */
+		BigDecimal pending = calculatePendingAmount(booking);
+
+		if (pending.compareTo(BigDecimal.ZERO) <= 0) {
+			throw new BusinessException(
+					ErrorCode.PAYMENT_ALREADY_CONFIRMED,
+					"This booking is already fully paid -- no cash collection is required"
+			);
+		}
+
+		Payment payment = new Payment();
+		payment.setOrgId(orgId);
+		payment.setBooking(booking);
+		payment.setPaymentMode(PaymentMode.CASH);
+		payment.setGateway(PaymentGateway.MANUAL_ENTRY);
+		payment.setReceivedAmount(Money.INR(pending));
+		payment.setTds(Money.INR(BigDecimal.ZERO));
+		payment.setStatus(PaymentStatus.CONFIRMED);
+		payment.setTransactionDate(Instant.now());
+		payment.setCollectionContext(DRIVER_DUTY_CASH_CONTEXT);
+		payment.setCollectionContextId(dutyId);
+		payment.setCashCollectionReference(dutyId);
+		payment.setRemarks("Cash collected by driver at duty close (ip " + ipAddress + ", " + userAgent + ")");
+		payment.setCreatedAt(Instant.now());
+
+		Payment saved;
+
+		try {
+			saved = paymentRepo.save(payment);
+		} catch (DataIntegrityViolationException raceLoser) {
+			/*
+			 * Defensive backstop only -- the entry-row lock above should
+			 * already make this unreachable. If it's ever hit anyway (e.g. a
+			 * future refactor drops the lock), fail safe by returning the
+			 * winning row instead of a confusing 500, never a duplicate.
+			 */
+			Payment winner = paymentRepo
+					.findFirstByOrgIdAndBooking_BookingIdAndCollectionContextAndCollectionContextIdOrderByCreatedAtDesc(
+							orgId, bookingId, DRIVER_DUTY_CASH_CONTEXT, dutyId)
+					.orElseThrow(() -> raceLoser);
+			return toCashConfirmationResponse(winner, "Cash payment already recorded");
+		}
+
+		PaymentConfirmedEvent event = paymentEventAssembler.toPaymentConfirmedEvent(booking, saved);
+		eventPublisher.publishEvent(event);
+
+		return toCashConfirmationResponse(saved, "Cash payment recorded");
+	}
+
+	private CashPaymentConfirmationResponse toCashConfirmationResponse(Payment payment, String message) {
+		return new CashPaymentConfirmationResponse(
+				true,
+				payment.getId(),
+				payment.getReceivedAmount().getAmount(),
+				payment.getTransactionDate(),
+				message
+		);
 	}
 
 	/*
@@ -976,8 +1146,35 @@ public class ExternalDriverDutyService {
 				.findFirstByBookingEntry_IdAndCheckpointTypeOrderBySubmittedAtDesc(entry.getId(), DriverDutyCheckpointType.CLOSE);
 
 		if (existing.isPresent()) {
-			// Idempotent -- double-close is a no-op success, not an error.
+			/*
+			 * Idempotent -- double-close is a no-op success, not an error.
+			 * Deliberately checked (and short-circuits) BEFORE the payment
+			 * guard below: a duty that was validly closed once must stay
+			 * idempotently closeable forever afterward, even in the
+			 * hypothetical case where its payment is later refunded --
+			 * payment settlement is a precondition for the FIRST close, not
+			 * something re-litigated on every replay of an already-successful
+			 * close.
+			 */
 			return new CloseDutyConfirmationResponse(true, existing.get().getSubmittedAt());
+		}
+
+		/*
+		 * P0 financial-integrity guard -- a duty must not be closeable while
+		 * the booking still has an outstanding amount, regardless of
+		 * collection method. Reuses the exact same calculatePendingAmount
+		 * used to derive the QR/cash amount in the first place, so a
+		 * prepaid, QR-paid, or cash-paid booking (any CONFIRMED payment,
+		 * method-agnostic) is never incorrectly blocked -- only a booking
+		 * with a genuinely unpaid balance is.
+		 */
+		BigDecimal pendingAmount = calculatePendingAmount(entry.getBooking());
+
+		if (pendingAmount.compareTo(BigDecimal.ZERO) > 0) {
+			throw new BusinessException(
+					ErrorCode.PAYMENT_REQUIRED,
+					"Outstanding payment of " + pendingAmount + " must be collected before this duty can be closed"
+			);
 		}
 
 		Instant submittedAt = Instant.now();
