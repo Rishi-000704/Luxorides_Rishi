@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.lang.NonNull;
+import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
+import org.springframework.security.core.userdetails.UserDetailsChecker;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
@@ -44,6 +46,11 @@ public class CustomerDutyLocationHandshakeInterceptor implements HandshakeInterc
 	private final BookingEntryRepository bookingEntryRepository;
 	private final ClientService clientService;
 
+	// P0 -- a disabled/revoked account must not be able to open a NEW
+	// WebSocket connection with an old JWT either. Same reused Spring
+	// Security check as JwtAuthenticationFilter, not a bespoke one.
+	private static final UserDetailsChecker ACCOUNT_STATUS_CHECKER = new AccountStatusUserDetailsChecker();
+
 	@Override
 	public boolean beforeHandshake(
 			@NonNull ServerHttpRequest request,
@@ -67,6 +74,11 @@ public class CustomerDutyLocationHandshakeInterceptor implements HandshakeInterc
 				response.setStatusCode(HttpStatus.UNAUTHORIZED);
 				return false;
 			}
+
+			// Fresh DB read above (UserDetailsService does a plain findById,
+			// no caching), so this is today's authoritative account status,
+			// not whatever was true when this JWT was issued.
+			ACCOUNT_STATUS_CHECKER.check(user);
 
 			BookingEntry entry = bookingEntryRepository.findByDutyIdAndOrgId(dutyId, user.getOrgId())
 					.orElseThrow();

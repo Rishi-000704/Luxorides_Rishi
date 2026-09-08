@@ -277,6 +277,37 @@ class AuthenticationServiceDriverTest {
 		verify(driverRepository, never()).save(any(Driver.class));
 	}
 
+	// P0 -- OTP login mints a fresh JWT directly (no AuthenticationManager
+	// involved, since there's no password here), so it never got the
+	// account-status check employee password login gets for free. A
+	// disabled driver account must not be able to obtain a new valid
+	// session just by re-verifying OTP.
+	@Test
+	void verifyDriverOtp_disabledAccount_rejected_repeatLogin() {
+		UserOtp otp = validOtpRecord();
+		when(userOtpRepository.findByPhone(PHONE)).thenReturn(otp);
+		when(passwordEncoder.matches("123456", "hashed")).thenReturn(true);
+
+		Driver driver = new Driver();
+		driver.setId("driver-1");
+		driver.setPhone(PHONE);
+		driver.setOrgId(ORG_ID);
+		driver.setUserId("user-1");
+		when(driverRepository.findByPhoneAndOrgId(PHONE, ORG_ID)).thenReturn(driver);
+
+		User existingUser = new User();
+		existingUser.setId("user-1");
+		existingUser.setAccountType(AccountType.DRIVER);
+		existingUser.setEnabled(false);
+		when(userRepository.findByPhoneAndOrgIdAndAccountType(PHONE, ORG_ID, AccountType.DRIVER))
+				.thenReturn(Optional.of(existingUser));
+
+		assertThrows(BusinessException.class,
+				() -> service.verifyDriverOtp(new DriverOtpVerifyRequest(PHONE, ORG_ID, "123456")));
+
+		verify(jwtService, never()).generateToken(any(User.class));
+	}
+
 	@Test
 	void verifyDriverOtp_correctOtp_unknownDriver_stillRejected() {
 		UserOtp otp = validOtpRecord();

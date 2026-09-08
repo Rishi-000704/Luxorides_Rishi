@@ -4,10 +4,12 @@ import java.io.IOException;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.NonNull;
+import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsChecker;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -26,6 +28,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	private final HandlerExceptionResolver handlerExceptionResolver;
 	private final JwtService jwtService;
 	private final UserDetailsService userDetailsService;
+
+	/*
+	 * P0 -- reused, well-tested Spring Security logic (checks
+	 * isEnabled/isAccountNonLocked/isAccountNonExpired/isCredentialsNonExpired
+	 * on the UserDetails, throwing DisabledException/LockedException/etc.,
+	 * all AuthenticationException subtypes) rather than a bespoke enabled
+	 * check. This is exactly what DaoAuthenticationProvider already runs on
+	 * every interactive login -- this filter is the one place a *reused*
+	 * JWT skipped it, since it builds the Authentication by hand instead of
+	 * going through the AuthenticationManager.
+	 */
+	private static final UserDetailsChecker ACCOUNT_STATUS_CHECKER = new AccountStatusUserDetailsChecker();
 
 	public JwtAuthenticationFilter(JwtService jwtService, UserDetailsService userDetailsService,
 			 @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
@@ -61,6 +75,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	            UserDetails userDetails = this.userDetailsService.loadUserByUsername(userId);
 
 	            if (jwtService.isTokenValid(jwt, userDetails)) {
+	                /*
+	                 * P0 -- isTokenValid only checks the JWT's own subject and
+	                 * expiry, never the account's CURRENT status. userDetails
+	                 * above is a fresh, uncached DB read
+	                 * (ApplicationConfiguration#userDetailsService does a plain
+	                 * findById on every call, no caching layer), so this is
+	                 * always today's authoritative enabled/locked state, not
+	                 * whatever was true when this (up to ~30-day-lived) JWT was
+	                 * issued. Throws before any Authentication is ever placed
+	                 * in the SecurityContext for a disabled/revoked account.
+	                 */
+	                ACCOUNT_STATUS_CHECKER.check(userDetails);
+
 	                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(userDetails,
 	                        null, userDetails.getAuthorities());
 

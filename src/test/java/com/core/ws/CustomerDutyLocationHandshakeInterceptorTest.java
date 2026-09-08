@@ -140,4 +140,19 @@ class CustomerDutyLocationHandshakeInterceptorTest {
 		assertFalse(result);
 		verify(response).setStatusCode(HttpStatus.UNAUTHORIZED);
 	}
+
+	// P0 -- a disabled account must not be able to open a NEW WebSocket
+	// connection with an old-but-cryptographically-valid JWT.
+	@Test
+	void beforeHandshake_disabledAccount_isRejected_evenWithAnOtherwiseValidToken() {
+		User user = authenticatedUser();
+		user.setEnabled(false);
+		stubValidToken(user);
+
+		boolean result = interceptor.beforeHandshake(
+				requestFor(DUTY_ID), response, mock(WebSocketHandler.class), new HashMap<>());
+
+		assertFalse(result);
+		verify(response).setStatusCode(HttpStatus.UNAUTHORIZED);
+	}
 }

@@ -258,6 +258,18 @@ public class AuthenticationService {
 				this.clientRepository.save(localClient);
 			}
 
+			/*
+			 * P0 -- OTP login mints a fresh JWT directly, bypassing
+			 * AuthenticationManager (there is no password here for
+			 * DaoAuthenticationProvider to check), so it never got the
+			 * account-status check that path gives employee logins for
+			 * free. A disabled account must not be able to obtain a new
+			 * valid session at all, not just have an old one rejected.
+			 */
+			if (!localUser.isEnabled()) {
+				throw new BusinessException(ErrorCode.ACCOUNT_DISABLED, "This account has been disabled. Contact your administrator.");
+			}
+
 			OtpAuthenticationToken authToken = new OtpAuthenticationToken(localUser);
 
 			SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -317,6 +329,16 @@ public class AuthenticationService {
 		if (driver.getUserId() == null) {
 			driver.setUserId(user.getId());
 			this.driverRepository.save(driver);
+		}
+
+		/*
+		 * P0 -- same account-status gap as verifyOtp above: OTP login mints
+		 * a fresh JWT directly, bypassing AuthenticationManager entirely, so
+		 * it never got the account-status check employee password login
+		 * gets for free from DaoAuthenticationProvider.
+		 */
+		if (!user.isEnabled()) {
+			throw new BusinessException(ErrorCode.ACCOUNT_DISABLED, "This account has been disabled. Contact your administrator.");
 		}
 
 		OtpAuthenticationToken authToken = new OtpAuthenticationToken(user);
