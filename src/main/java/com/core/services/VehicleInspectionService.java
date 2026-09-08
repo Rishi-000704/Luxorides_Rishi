@@ -57,7 +57,8 @@ public class VehicleInspectionService {
 			MultipartFile interiorDashboard,
 			MultipartFile interiorFrontSeats,
 			MultipartFile interiorBackSeats,
-			MultipartFile interiorBootSpace
+			MultipartFile interiorBootSpace,
+			MultipartFile uniformSelfie
 	) throws IOException {
 		Driver driver = driverRepository.findByUserId(userId)
 				.filter(d -> orgId.equals(d.getOrgId()))
@@ -102,6 +103,7 @@ public class VehicleInspectionService {
 		inspection.setInteriorFrontSeatsPhoto(saveImage(interiorFrontSeats, inspection.getInteriorFrontSeatsPhoto(), supersededPhotos));
 		inspection.setInteriorBackSeatsPhoto(saveImage(interiorBackSeats, inspection.getInteriorBackSeatsPhoto(), supersededPhotos));
 		inspection.setInteriorBootSpacePhoto(saveImage(interiorBootSpace, inspection.getInteriorBootSpacePhoto(), supersededPhotos));
+		inspection.setUniformSelfiePhoto(saveImage(uniformSelfie, inspection.getUniformSelfiePhoto(), supersededPhotos));
 
 		// Enforced on the final set (existing photos from an earlier partial
 		// save + whatever this call just uploaded), not merely on this call's
@@ -110,7 +112,7 @@ public class VehicleInspectionService {
 		// retry that only resends changed photos still passes once every
 		// slot has been filled by some call.
 		if (!hasAllRequiredPhotos(inspection)) {
-			throw new BusinessException(ErrorCode.BAD_REQUEST, "All 8 vehicle photos are required to submit the inspection");
+			throw new BusinessException(ErrorCode.BAD_REQUEST, "All 8 vehicle photos and the uniform selfie are required to submit the inspection");
 		}
 
 		VehicleInspection saved = vehicleInspectionRepository.save(inspection);
@@ -141,7 +143,8 @@ public class VehicleInspectionService {
 				&& inspection.getInteriorDashboardPhoto() != null
 				&& inspection.getInteriorFrontSeatsPhoto() != null
 				&& inspection.getInteriorBackSeatsPhoto() != null
-				&& inspection.getInteriorBootSpacePhoto() != null;
+				&& inspection.getInteriorBootSpacePhoto() != null
+				&& inspection.getUniformSelfiePhoto() != null;
 	}
 
 	/**

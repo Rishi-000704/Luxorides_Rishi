@@ -14,6 +14,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -34,9 +35,13 @@ import com.core.services.common.FileService;
 
 /*
  * Covers the P2.3 hardening of VehicleInspectionService: every condition
- * rating + driver confirmation + all 8 photos are now required before a
+ * rating + driver confirmation + all 8 vehicle photos are required before a
  * submission is accepted, enforced server-side regardless of what the
- * mobile client already validates.
+ * mobile client already validates. P1 (chauffeur audit) adds the uniform
+ * selfie as a 9th required photo, closing the gap where the mobile app
+ * captured and displayed it as "verified" readiness evidence but never
+ * actually transmitted it -- it now goes through the exact same
+ * save/retake/supersede path as the other 8 photos, no new architecture.
  */
 class VehicleInspectionServiceTest {
 
@@ -106,10 +111,25 @@ class VehicleInspectionServiceTest {
 		VehicleInspectionResponse response = service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front"), photo("back"), photo("left"), photo("right"),
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
 		);
 
 		assertTrue(response.received());
+	}
+
+	@Test
+	void submitInspection_persistsUniformSelfiePhoto_alongsideVehiclePhotos() throws Exception {
+		service.submitInspection(
+				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
+				photo("front"), photo("back"), photo("left"), photo("right"),
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
+		);
+
+		ArgumentCaptor<VehicleInspection> captor = ArgumentCaptor.forClass(VehicleInspection.class);
+		verify(vehicleInspectionRepository).save(captor.capture());
+		assertEquals("selfie.jpg", captor.getValue().getUniformSelfiePhoto());
 	}
 
 	@Test
@@ -117,7 +137,8 @@ class VehicleInspectionServiceTest {
 		assertThrows(BusinessException.class, () -> service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(false),
 				photo("front"), photo("back"), photo("left"), photo("right"),
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
 		));
 	}
 
@@ -132,7 +153,8 @@ class VehicleInspectionServiceTest {
 		assertThrows(BusinessException.class, () -> service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, incomplete,
 				photo("front"), photo("back"), photo("left"), photo("right"),
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
 		));
 	}
 
@@ -141,7 +163,18 @@ class VehicleInspectionServiceTest {
 		assertThrows(BusinessException.class, () -> service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front"), photo("back"), photo("left"), null,
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
+		));
+	}
+
+	@Test
+	void submitInspection_rejects_whenUniformSelfieIsMissing_andDoesNotPersist() {
+		assertThrows(BusinessException.class, () -> service.submitInspection(
+				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
+				photo("front"), photo("back"), photo("left"), photo("right"),
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				null
 		));
 	}
 
@@ -157,18 +190,21 @@ class VehicleInspectionServiceTest {
 		existing.setInteriorFrontSeatsPhoto("frontSeats.jpg");
 		existing.setInteriorBackSeatsPhoto("backSeats.jpg");
 		existing.setInteriorBootSpacePhoto("boot.jpg");
+		existing.setUniformSelfiePhoto("selfie.jpg");
 		when(vehicleInspectionRepository.findByDutyIdAndOrgId(DUTY_ID, ORG_ID)).thenReturn(Optional.of(existing));
 
 		// Retake only one photo -- the rest keep their already-stored filenames.
 		VehicleInspectionResponse response = service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front-retake"), null, null, null,
-				null, null, null, null
+				null, null, null, null,
+				null
 		);
 
 		assertEquals("inspection-1", response.id());
 		assertEquals("front-retake.jpg", existing.getExteriorFrontPhoto());
 		assertEquals("back.jpg", existing.getExteriorBackPhoto());
+		assertEquals("selfie.jpg", existing.getUniformSelfiePhoto());
 	}
 
 	@Test
@@ -183,19 +219,49 @@ class VehicleInspectionServiceTest {
 		existing.setInteriorFrontSeatsPhoto("frontSeats.jpg");
 		existing.setInteriorBackSeatsPhoto("backSeats.jpg");
 		existing.setInteriorBootSpacePhoto("boot.jpg");
+		existing.setUniformSelfiePhoto("selfie.jpg");
 		when(vehicleInspectionRepository.findByDutyIdAndOrgId(DUTY_ID, ORG_ID)).thenReturn(Optional.of(existing));
 
 		service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front-retake"), null, null, null,
-				null, null, null, null
+				null, null, null, null,
+				null
 		);
 
-		// Only the slot that actually changed is cleaned up -- the other 7
+		// Only the slot that actually changed is cleaned up -- the other
 		// untouched slots' files must never be deleted.
 		verify(fileService).deleteFile("front-old.jpg");
 		verify(fileService, never()).deleteFile("back.jpg");
 		verify(fileService, never()).deleteFile("left.jpg");
+		verify(fileService, never()).deleteFile("selfie.jpg");
+	}
+
+	@Test
+	void submitInspection_retake_ofUniformSelfieOnly_supersedesOnlyThatSlot() throws Exception {
+		VehicleInspection existing = new VehicleInspection();
+		existing.setId("inspection-1");
+		existing.setExteriorFrontPhoto("front.jpg");
+		existing.setExteriorBackPhoto("back.jpg");
+		existing.setExteriorLeftPhoto("left.jpg");
+		existing.setExteriorRightPhoto("right.jpg");
+		existing.setInteriorDashboardPhoto("dash.jpg");
+		existing.setInteriorFrontSeatsPhoto("frontSeats.jpg");
+		existing.setInteriorBackSeatsPhoto("backSeats.jpg");
+		existing.setInteriorBootSpacePhoto("boot.jpg");
+		existing.setUniformSelfiePhoto("selfie-old.jpg");
+		when(vehicleInspectionRepository.findByDutyIdAndOrgId(DUTY_ID, ORG_ID)).thenReturn(Optional.of(existing));
+
+		service.submitInspection(
+				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
+				null, null, null, null,
+				null, null, null, null,
+				photo("selfie-retake")
+		);
+
+		assertEquals("selfie-retake.jpg", existing.getUniformSelfiePhoto());
+		verify(fileService).deleteFile("selfie-old.jpg");
+		verify(fileService, never()).deleteFile("front.jpg");
 	}
 
 	@Test
@@ -203,7 +269,8 @@ class VehicleInspectionServiceTest {
 		service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front"), photo("back"), photo("left"), photo("right"),
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
 		);
 
 		verify(fileService, never()).deleteFile(any());
@@ -216,11 +283,13 @@ class VehicleInspectionServiceTest {
 		existing.setExteriorFrontPhoto("front-old.jpg");
 		when(vehicleInspectionRepository.findByDutyIdAndOrgId(DUTY_ID, ORG_ID)).thenReturn(Optional.of(existing));
 
-		// Missing the other 7 required photos -- submission is rejected
-		// before vehicleInspectionRepository.save is ever called.
+		// Missing every other required photo (including the uniform selfie)
+		// -- submission is rejected before vehicleInspectionRepository.save
+		// is ever called.
 		assertThrows(BusinessException.class, () -> service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
-				photo("front-retake"), null, null, null, null, null, null, null
+				photo("front-retake"), null, null, null, null, null, null, null,
+				null
 		));
 
 		verify(fileService, never()).deleteFile(eq("front-old.jpg"));
@@ -233,7 +302,8 @@ class VehicleInspectionServiceTest {
 		assertThrows(NotFoundException.class, () -> service.submitInspection(
 				ORG_ID, USER_ID, DUTY_ID, completeRequest(true),
 				photo("front"), photo("back"), photo("left"), photo("right"),
-				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot")
+				photo("dash"), photo("frontSeats"), photo("backSeats"), photo("boot"),
+				photo("selfie")
 		));
 	}
 }

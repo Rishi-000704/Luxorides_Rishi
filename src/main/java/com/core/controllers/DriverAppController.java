@@ -91,7 +91,8 @@ public class DriverAppController {
 			@RequestPart(value = "interiorDashboard", required = false) MultipartFile interiorDashboard,
 			@RequestPart(value = "interiorFrontSeats", required = false) MultipartFile interiorFrontSeats,
 			@RequestPart(value = "interiorBackSeats", required = false) MultipartFile interiorBackSeats,
-			@RequestPart(value = "interiorBootSpace", required = false) MultipartFile interiorBootSpace
+			@RequestPart(value = "interiorBootSpace", required = false) MultipartFile interiorBootSpace,
+			@RequestPart(value = "uniformSelfie", required = false) MultipartFile uniformSelfie
 	) throws IOException {
 		return vehicleInspectionService.submitInspection(
 				security.orgId(),
@@ -105,7 +106,8 @@ public class DriverAppController {
 				interiorDashboard,
 				interiorFrontSeats,
 				interiorBackSeats,
-				interiorBootSpace
+				interiorBootSpace,
+				uniformSelfie
 		);
 	}
 }

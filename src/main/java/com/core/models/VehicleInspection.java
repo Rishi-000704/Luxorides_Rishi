@@ -75,6 +75,9 @@ public class VehicleInspection extends AuditableEntity {
 	@Column(length = 120)
 	private String interiorBootSpacePhoto;
 
+	@Column(length = 120)
+	private String uniformSelfiePhoto;
+
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 20)
 	private VehicleConditionRating exteriorCondition = VehicleConditionRating.GOOD;
