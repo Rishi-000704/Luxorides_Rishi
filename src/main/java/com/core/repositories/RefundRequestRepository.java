@@ -3,6 +3,8 @@ package com.core.repositories;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -24,6 +26,14 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, St
 	Optional<RefundRequest> findByIdAndOrgId(String id, String orgId);
 
 	Optional<RefundRequest> findFirstByOrgIdAndBookingIdOrderByCreatedAtDesc(String orgId, String bookingId);
+
+	// Ops recovery view (RefundController's paginated /page endpoint) --
+	// org-scoped, sort order driven entirely by the caller-supplied Pageable
+	// rather than a fixed OrderBy, since operators need to sort by amount/
+	// status too, not only createdAt.
+	Page<RefundRequest> findByOrgId(String orgId, Pageable pageable);
+
+	Page<RefundRequest> findByOrgIdAndStatus(String orgId, RefundRequestStatus status, Pageable pageable);
 
 	/*
 	 * P1.7 -- closes a confirmed race in RefundRequestService.approve/reject:

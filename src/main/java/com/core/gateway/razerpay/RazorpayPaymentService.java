@@ -606,6 +606,93 @@ public class RazorpayPaymentService {
 	}
 
 	/*
+	 * Ops recovery (RefundRequestService.verifyRecovery): given a
+	 * COMPLETED_NEEDS_VERIFICATION request, prove -- from Razorpay directly,
+	 * never from local state alone -- whether the refund already exists
+	 * before an operator is allowed to treat it as safe to retry.
+	 *
+	 * If a gatewayRefundId is already on the local record (the normal case:
+	 * refundPayment's catch block always captures it from Razorpay's own
+	 * response before local persistence failed), a single targeted
+	 * payments.fetchRefund confirms that exact id still checks out against
+	 * this payment/amount -- cheaper and more certain than a broader search.
+	 * Only falls back to the amount-based fetchAllRefunds search
+	 * (findExistingRefund, same mechanism refundPayment's own pre-refund
+	 * idempotency check uses) when there is no known id or the targeted
+	 * lookup could not confirm it -- never as the default path, to avoid an
+	 * unnecessary provider call when local state already narrows the answer.
+	 */
+	public record RefundVerification(String refundId) {
+	}
+
+	public RefundVerification verifyRefund(
+			String orgId,
+			String bookingId,
+			String knownRefundId,
+			BigDecimal expectedRefundAmount
+	) throws Exception {
+
+		RazorpayCredentials credentials = razorpayClientFactory.credentials(orgId);
+		RazorpayClient razorpayClient = razorpayClientFactory.client(credentials);
+
+		Booking booking = bookingRepo.findByBookingIdAndOrgId(bookingId, orgId)
+				.orElseThrow(() -> new IllegalStateException("Booking not found"));
+
+		Payment gatewayPayment = booking.getPayments().stream()
+				.filter(p -> p.getGatewayPaymentId() != null && !p.getGatewayPaymentId().isBlank())
+				.filter(p -> p.getStatus() == PaymentStatus.CONFIRMED || p.getStatus() == PaymentStatus.REFUNDED)
+				.findFirst()
+				.orElseThrow(() -> new IllegalStateException(
+						"No confirmed/refunded gateway payment found on this booking to verify"));
+
+		long expectedAmountInPaise = toSubunits(expectedRefundAmount);
+
+		if (knownRefundId != null && !knownRefundId.isBlank()) {
+			try {
+				Refund refund = razorpayClient.payments.fetchRefund(gatewayPayment.getGatewayPaymentId(), knownRefundId);
+
+				if (refund != null) {
+					Object amount = refund.get("amount");
+
+					if (amount instanceof Number number && number.longValue() == expectedAmountInPaise) {
+						markPaymentRefundedIfNeeded(gatewayPayment);
+						return new RefundVerification(knownRefundId);
+					}
+
+					log.warn("Known refund {} for payment {} did not match expected amount on re-verification -- "
+							+ "falling back to a broader search",
+							knownRefundId, gatewayPayment.getId());
+				}
+			} catch (Exception ex) {
+				log.warn("Targeted refund lookup failed for refund {}, falling back to a broader search: {}",
+						knownRefundId, ex.getMessage());
+			}
+		}
+
+		Optional<String> found = findExistingRefund(razorpayClient, gatewayPayment.getGatewayPaymentId(), expectedAmountInPaise);
+
+		found.ifPresent(id -> markPaymentRefundedIfNeeded(gatewayPayment));
+
+		return new RefundVerification(found.orElse(null));
+	}
+
+	/*
+	 * refundPayment's local Payment.setStatus(REFUNDED) is rolled back
+	 * whenever RefundPersistenceException fires (same transaction, same
+	 * failed save) -- so a payment genuinely refunded at Razorpay can still
+	 * read CONFIRMED locally until this reconciles it. Only ever called after
+	 * a provider lookup has just proven the refund exists.
+	 */
+	private void markPaymentRefundedIfNeeded(Payment payment) {
+		if (payment.getStatus() == PaymentStatus.REFUNDED) {
+			return;
+		}
+
+		payment.setStatus(PaymentStatus.REFUNDED);
+		paymentRepo.save(payment);
+	}
+
+	/*
 	 * Matches by gatewayPaymentId + exact refunded amount -- the strongest
 	 * identifiers available without a client-generated idempotency key.
 	 * RefundRequestService never issues more than one RefundRequest per

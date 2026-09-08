@@ -216,4 +216,165 @@ class RefundRequestServiceTest {
 
 		verify(razorpayPaymentService, never()).refundPayment(any(), any(), any());
 	}
+
+	/* ================= createFromCancellation: idempotency ================= */
+
+	@Test
+	void createFromCancellation_skipsCreation_whenARequestAlreadyExistsForBooking() {
+		when(refundRequestRepository.findFirstByOrgIdAndBookingIdOrderByCreatedAtDesc(ORG_ID, BOOKING_ID))
+				.thenReturn(Optional.of(pendingRequest(new BigDecimal("500.00"))));
+
+		service.createFromCancellation(ORG_ID, BOOKING_ID, new BigDecimal("500.00"), BigDecimal.ZERO);
+
+		verify(refundRequestRepository, never()).save(any(RefundRequest.class));
+	}
+
+	@Test
+	void createFromCancellation_creates_whenNoExistingRequestForBooking() {
+		when(refundRequestRepository.findFirstByOrgIdAndBookingIdOrderByCreatedAtDesc(ORG_ID, BOOKING_ID))
+				.thenReturn(Optional.empty());
+
+		service.createFromCancellation(ORG_ID, BOOKING_ID, new BigDecimal("500.00"), new BigDecimal("50.00"));
+
+		verify(refundRequestRepository, times(1)).save(any(RefundRequest.class));
+	}
+
+	@Test
+	void createFromCancellation_skipsCreation_whenNothingWasPaid() {
+		service.createFromCancellation(ORG_ID, BOOKING_ID, BigDecimal.ZERO, BigDecimal.ZERO);
+
+		verify(refundRequestRepository, never()).findFirstByOrgIdAndBookingIdOrderByCreatedAtDesc(any(), any());
+		verify(refundRequestRepository, never()).save(any(RefundRequest.class));
+	}
+
+	/* ================= verifyRecovery ================= */
+
+	private RefundRequest needsVerificationRequest(BigDecimal refundAmount, String gatewayRefundId) {
+		RefundRequest r = new RefundRequest();
+		r.setId(REQUEST_ID);
+		r.setOrgId(ORG_ID);
+		r.setBookingId(BOOKING_ID);
+		r.setRefundAmount(refundAmount);
+		r.setGatewayRefundId(gatewayRefundId);
+		r.setStatus(RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION);
+		return r;
+	}
+
+	@Test
+	void verifyRecovery_marksCompleted_whenProviderConfirmsRefundExists() throws Exception {
+		RefundRequest request = needsVerificationRequest(new BigDecimal("500.00"), "rfnd_real");
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, ORG_ID)).thenReturn(Optional.of(request));
+		when(razorpayPaymentService.verifyRefund(ORG_ID, BOOKING_ID, "rfnd_real", new BigDecimal("500.00")))
+				.thenReturn(new RazorpayPaymentService.RefundVerification("rfnd_real"));
+
+		Booking booking = new Booking();
+		when(bookingRepository.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+		when(refundEventAssembler.toRefundCompletedEvent(booking)).thenReturn(mock(RefundCompletedEvent.class));
+
+		RefundRequestService.RecoveryResult result = service.verifyRecovery(REQUEST_ID, ORG_ID, REVIEWER);
+
+		assertEquals(RefundRequestService.RecoveryOutcome.ALREADY_REFUNDED, result.outcome());
+		assertEquals(RefundRequestStatus.COMPLETED, request.getStatus());
+		assertEquals("rfnd_real", request.getGatewayRefundId());
+		verify(eventPublisher, times(1)).publishEvent(any(RefundCompletedEvent.class));
+	}
+
+	@Test
+	void verifyRecovery_reopensToPendingReview_whenProviderConfirmsNoRefundExists() throws Exception {
+		RefundRequest request = needsVerificationRequest(new BigDecimal("500.00"), null);
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, ORG_ID)).thenReturn(Optional.of(request));
+		when(razorpayPaymentService.verifyRefund(ORG_ID, BOOKING_ID, null, new BigDecimal("500.00")))
+				.thenReturn(new RazorpayPaymentService.RefundVerification(null));
+
+		RefundRequestService.RecoveryResult result = service.verifyRecovery(REQUEST_ID, ORG_ID, REVIEWER);
+
+		assertEquals(RefundRequestService.RecoveryOutcome.RETRY_ELIGIBLE, result.outcome());
+		assertEquals(RefundRequestStatus.PENDING_REVIEW, request.getStatus());
+		verify(eventPublisher, never()).publishEvent(any());
+		// Never issues a refund itself -- only approve() (with its own guards) does.
+		verify(razorpayPaymentService, never()).refundPayment(any(), any(), any());
+	}
+
+	@Test
+	void verifyRecovery_keepsRecoveryState_whenProviderCannotBeReached() throws Exception {
+		RefundRequest request = needsVerificationRequest(new BigDecimal("500.00"), "rfnd_real");
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, ORG_ID)).thenReturn(Optional.of(request));
+		when(razorpayPaymentService.verifyRefund(any(), any(), any(), any()))
+				.thenThrow(new RuntimeException("Razorpay API timeout"));
+
+		RefundRequestService.RecoveryResult result = service.verifyRecovery(REQUEST_ID, ORG_ID, REVIEWER);
+
+		assertEquals(RefundRequestService.RecoveryOutcome.VERIFICATION_INCONCLUSIVE, result.outcome());
+		assertEquals(RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION, request.getStatus());
+		verify(eventPublisher, never()).publishEvent(any());
+	}
+
+	@Test
+	void verifyRecovery_rejects_whenRequestIsNotInRecoveryState() {
+		RefundRequest request = pendingRequest(new BigDecimal("500.00"));
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, ORG_ID)).thenReturn(Optional.of(request));
+
+		assertThrows(BusinessException.class, () -> service.verifyRecovery(REQUEST_ID, ORG_ID, REVIEWER));
+	}
+
+	@Test
+	void verifyRecovery_wrongOrg_notFound() {
+		when(refundRequestRepository.lockByIdAndOrgId(REQUEST_ID, "other-org")).thenReturn(Optional.empty());
+
+		assertThrows(BusinessException.class, () -> service.verifyRecovery(REQUEST_ID, "other-org", REVIEWER));
+	}
+
+	/* ================= getOpsPage: organization isolation ================= */
+
+	@Test
+	void getOpsPage_scopesQueryToCallingOrg() {
+		org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, 20);
+		when(refundRequestRepository.findByOrgId(ORG_ID, pageable))
+				.thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of()));
+
+		service.getOpsPage(ORG_ID, null, pageable);
+
+		verify(refundRequestRepository, times(1)).findByOrgId(ORG_ID, pageable);
+		verify(refundRequestRepository, never()).findByOrgId(org.mockito.ArgumentMatchers.eq("other-org"), any());
+	}
+
+	@Test
+	void getOpsPage_filtersByStatus_whenProvided() {
+		org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, 20);
+		when(refundRequestRepository.findByOrgIdAndStatus(ORG_ID, RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION, pageable))
+				.thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of()));
+
+		service.getOpsPage(ORG_ID, RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION, pageable);
+
+		verify(refundRequestRepository, times(1))
+				.findByOrgIdAndStatus(ORG_ID, RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION, pageable);
+		verify(refundRequestRepository, never()).findByOrgId(any(), any());
+	}
+
+	@Test
+	void getOpsPage_enrichesWithCustomerReference_viaOneBatchQuery() {
+		org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, 20);
+		RefundRequest request = pendingRequest(new BigDecimal("500.00"));
+		when(refundRequestRepository.findByOrgId(ORG_ID, pageable))
+				.thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(request)));
+
+		com.core.models.Client client = new com.core.models.Client();
+		com.core.models.embedded.Name name = new com.core.models.embedded.Name();
+		name.setFirstName("Asha");
+		client.setName(name);
+		client.setPhone("9999999999");
+
+		Booking booking = new Booking();
+		booking.setBookingId(BOOKING_ID);
+		booking.setClient(client);
+
+		when(bookingRepository.findAllByBookingIdInAndOrgId(java.util.List.of(BOOKING_ID), ORG_ID))
+				.thenReturn(java.util.List.of(booking));
+
+		org.springframework.data.domain.Page<com.core.dtos.payment.RefundOpsListItem> result =
+				service.getOpsPage(ORG_ID, null, pageable);
+
+		assertEquals("9999999999", result.getContent().get(0).customerPhone());
+		verify(bookingRepository, times(1)).findAllByBookingIdInAndOrgId(any(), any());
+	}
 }

@@ -62,6 +62,14 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 
 	Optional<Booking> findByBookingIdAndOrgId(String bookingId, String orgId);
 
+	/*
+	 * Batch lookup for RefundRequestService.getOpsPage: RefundRequest only
+	 * stores a plain bookingId string (no JPA relation), so displaying a
+	 * customer reference alongside a page of refund requests needs exactly
+	 * one extra query per page -- never one per row.
+	 */
+	List<Booking> findAllByBookingIdInAndOrgId(List<String> bookingIds, String orgId);
+
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("""
 		SELECT b

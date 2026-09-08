@@ -41,7 +41,18 @@ public class RefundRequest extends AuditableEntity {
 	@Column(nullable = false, length = 40)
 	private String orgId;
 
-	@Column(nullable = false, length = 40)
+	/*
+	 * unique = true: a booking can only ever be cancelled once (see
+	 * BookingService.cancelBooking's CANCELLED-status guard -- there is no
+	 * "reactivate" path in this system today), so at most one RefundRequest
+	 * should ever exist per booking. This is the DB-level backstop for
+	 * RefundRequestService.createFromCancellation's existence check, the same
+	 * belt-and-suspenders pattern already used for Payment.gatewayOrderId/
+	 * gatewayPaymentId. bookingId is a globally-unique Booking primary key
+	 * (not per-org), so a plain unique constraint here is correct without
+	 * needing orgId in the key.
+	 */
+	@Column(nullable = false, length = 40, unique = true)
 	private String bookingId;
 
 	@Column(precision = 12, scale = 2)

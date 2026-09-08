@@ -3,6 +3,7 @@ package com.core.gateway.razerpay;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -722,6 +723,110 @@ class RazorpayPaymentServiceTest {
 		service.expireIfStillInitiatedPastGracePeriod("order_abc", Instant.now().minus(1, ChronoUnit.HOURS));
 
 		assertEquals(PaymentStatus.CONFIRMED, payment.getStatus());
+		verify(paymentRepo, never()).save(any(Payment.class));
+	}
+
+	/* ================= REFUND-RECOVERY: verifyRefund (Ops Phase 3/5) ================= */
+
+	@Test
+	void verifyRefund_confirmsViaTargetedLookup_whenKnownRefundIdMatches() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		com.razorpay.Refund refund = new com.razorpay.Refund(new JSONObject().put("id", "rfnd_real").put("amount", 40000L));
+		when(paymentClient.fetchRefund("pay_captured", "rfnd_real")).thenReturn(refund);
+
+		RazorpayPaymentService.RefundVerification result =
+				service.verifyRefund(ORG_ID, BOOKING_ID, "rfnd_real", new BigDecimal("400.00"));
+
+		assertEquals("rfnd_real", result.refundId());
+		verify(paymentClient, never()).fetchAllRefunds(anyString());
+	}
+
+	@Test
+	void verifyRefund_fallsBackToBroaderSearch_whenTargetedLookupFails() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		when(paymentClient.fetchRefund("pay_captured", "rfnd_real")).thenThrow(new RazorpayException("not found"));
+
+		com.razorpay.Refund found = new com.razorpay.Refund(new JSONObject().put("id", "rfnd_real").put("amount", 40000L));
+		when(paymentClient.fetchAllRefunds("pay_captured")).thenReturn(java.util.List.of(found));
+
+		RazorpayPaymentService.RefundVerification result =
+				service.verifyRefund(ORG_ID, BOOKING_ID, "rfnd_real", new BigDecimal("400.00"));
+
+		assertEquals("rfnd_real", result.refundId());
+	}
+
+	@Test
+	void verifyRefund_broaderSearch_whenNoKnownRefundId() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		com.razorpay.Refund found = new com.razorpay.Refund(new JSONObject().put("id", "rfnd_found").put("amount", 40000L));
+		when(paymentClient.fetchAllRefunds("pay_captured")).thenReturn(java.util.List.of(found));
+
+		RazorpayPaymentService.RefundVerification result =
+				service.verifyRefund(ORG_ID, BOOKING_ID, null, new BigDecimal("400.00"));
+
+		assertEquals("rfnd_found", result.refundId());
+		verify(paymentClient, never()).fetchRefund(any(), any());
+	}
+
+	@Test
+	void verifyRefund_returnsNoRefundId_whenNoneExistsAtProvider() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		when(paymentClient.fetchAllRefunds("pay_captured")).thenReturn(java.util.List.of());
+
+		RazorpayPaymentService.RefundVerification result =
+				service.verifyRefund(ORG_ID, BOOKING_ID, null, new BigDecimal("400.00"));
+
+		assertEquals(null, result.refundId());
+	}
+
+	@Test
+	void verifyRefund_marksLocalPaymentRefunded_whenConfirmedByProvider() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		com.razorpay.Refund refund = new com.razorpay.Refund(new JSONObject().put("id", "rfnd_real").put("amount", 40000L));
+		when(paymentClient.fetchRefund("pay_captured", "rfnd_real")).thenReturn(refund);
+
+		service.verifyRefund(ORG_ID, BOOKING_ID, "rfnd_real", new BigDecimal("400.00"));
+
+		assertEquals(PaymentStatus.REFUNDED, booking.getPayments().get(0).getStatus());
+		verify(paymentRepo, times(1)).save(any(Payment.class));
+	}
+
+	@Test
+	void verifyRefund_worksAgainstAlreadyRefundedLocalPayment_forLateVerification() throws Exception {
+		Booking booking = bookingWithConfirmedPayment("pay_captured", new BigDecimal("1000.00"));
+		booking.getPayments().get(0).setStatus(PaymentStatus.REFUNDED);
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		com.razorpay.PaymentClient paymentClient = mock(com.razorpay.PaymentClient.class);
+		razorpayClient.payments = paymentClient;
+		com.razorpay.Refund refund = new com.razorpay.Refund(new JSONObject().put("id", "rfnd_real").put("amount", 40000L));
+		when(paymentClient.fetchRefund("pay_captured", "rfnd_real")).thenReturn(refund);
+
+		RazorpayPaymentService.RefundVerification result =
+				service.verifyRefund(ORG_ID, BOOKING_ID, "rfnd_real", new BigDecimal("400.00"));
+
+		assertEquals("rfnd_real", result.refundId());
+		// Already REFUNDED -- must not re-save/no-op path taken.
 		verify(paymentRepo, never()).save(any(Payment.class));
 	}
 }

@@ -3,11 +3,16 @@ package com.core.services;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.core.dtos.payment.RefundOpsListItem;
 import com.core.events.RefundCompletedEvent;
 import com.core.events.assembler.RefundEventAssembler;
 import com.core.exception.BusinessException;
@@ -15,15 +20,18 @@ import com.core.exception.ErrorCode;
 import com.core.gateway.razerpay.RazorpayPaymentService;
 import com.core.gateway.razerpay.RefundPersistenceException;
 import com.core.models.Booking;
+import com.core.models.Client;
 import com.core.models.RefundRequest;
 import com.core.models.enums.RefundRequestStatus;
 import com.core.repositories.BookingRepository;
 import com.core.repositories.RefundRequestRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class RefundRequestService {
 
 	private final RefundRequestRepository refundRequestRepository;
@@ -48,6 +56,21 @@ public class RefundRequestService {
 			return;
 		}
 
+		/*
+		 * Defense-in-depth idempotency guard: BookingService.cancelBooking's own
+		 * CANCELLED-status guard (under a row lock) already makes it impossible
+		 * for a legitimate double-cancellation to reach this method twice for
+		 * the same booking, so this should never actually trigger today -- but
+		 * this is the one place that inserts a RefundRequest, and this class
+		 * has no reason to trust that invariant alone for something a real
+		 * refund is calculated from. A booking is cancelled at most once, so at
+		 * most one RefundRequest should ever exist for it, full stop.
+		 */
+		if (refundRequestRepository.findFirstByOrgIdAndBookingIdOrderByCreatedAtDesc(orgId, bookingId).isPresent()) {
+			log.warn("Refund request already exists for booking {} -- skipping duplicate creation", bookingId);
+			return;
+		}
+
 		BigDecimal refundAmount = paid.subtract(fee);
 		if (refundAmount.signum() < 0) {
 			refundAmount = BigDecimal.ZERO;
@@ -67,6 +90,56 @@ public class RefundRequestService {
 	@Transactional(readOnly = true)
 	public List<RefundRequest> list(String orgId) {
 		return refundRequestRepository.findByOrgIdOrderByCreatedAtDesc(orgId);
+	}
+
+	/*
+	 * Ops recovery view (RefundController's paginated /page endpoint).
+	 * RefundRequest.bookingId is a plain string, not a JPA relation, so
+	 * enriching a page with a customer reference takes exactly one extra
+	 * batch query per page -- never one per row.
+	 */
+	@Transactional(readOnly = true)
+	public Page<RefundOpsListItem> getOpsPage(String orgId, RefundRequestStatus status, Pageable pageable) {
+		Page<RefundRequest> page = status != null
+				? refundRequestRepository.findByOrgIdAndStatus(orgId, status, pageable)
+				: refundRequestRepository.findByOrgId(orgId, pageable);
+
+		List<String> bookingIds = page.getContent().stream()
+				.map(RefundRequest::getBookingId)
+				.distinct()
+				.toList();
+
+		Map<String, Booking> bookingsById = bookingIds.isEmpty()
+				? Map.of()
+				: bookingRepository.findAllByBookingIdInAndOrgId(bookingIds, orgId).stream()
+						.collect(Collectors.toMap(Booking::getBookingId, booking -> booking));
+
+		return page.map(request -> toOpsListItem(request, bookingsById.get(request.getBookingId())));
+	}
+
+	private RefundOpsListItem toOpsListItem(RefundRequest request, Booking booking) {
+		Client client = booking != null ? booking.getClient() : null;
+
+		String customerName = client != null && client.getName() != null
+				? client.getName().getDisplayName()
+				: null;
+
+		String customerPhone = client != null ? client.getPhone() : null;
+
+		return new RefundOpsListItem(
+				request.getId(),
+				request.getBookingId(),
+				customerName,
+				customerPhone,
+				request.getPaidAmount(),
+				request.getFeeAmount(),
+				request.getRefundAmount(),
+				request.getStatus(),
+				request.getGatewayRefundId(),
+				request.getFailureReason(),
+				request.getReviewedBy(),
+				request.getReviewedAt(),
+				request.getCreatedAt());
 	}
 
 	@Transactional(readOnly = true)
@@ -144,6 +217,82 @@ public class RefundRequestService {
 
 			throw new BusinessException(ErrorCode.REFUND_FAILED, "Refund failed: " + ex.getMessage());
 		}
+	}
+
+	public enum RecoveryOutcome {
+		/** Razorpay confirmed the refund exists -- local state has been corrected to COMPLETED. */
+		ALREADY_REFUNDED,
+		/** Razorpay confirms no matching refund exists -- back to PENDING_REVIEW, safe to approve() again. */
+		RETRY_ELIGIBLE,
+		/** The provider could not be reached/queried -- status is unchanged, try verification again later. */
+		VERIFICATION_INCONCLUSIVE
+	}
+
+	public record RecoveryResult(RefundRequest request, RecoveryOutcome outcome, String message) {
+	}
+
+	/*
+	 * The ops recovery action for COMPLETED_NEEDS_VERIFICATION (see the
+	 * payment recovery audit): deliberately never a generic "refund again"
+	 * button. Always asks Razorpay first, then either fixes local state to
+	 * match a confirmed reality (ALREADY_REFUNDED) or -- only once the
+	 * provider has explicitly said no matching refund exists -- reopens the
+	 * request to PENDING_REVIEW so the existing, already-authorized,
+	 * already-idempotent approve() is what actually issues any retry. This
+	 * method itself never calls refundPayment.
+	 *
+	 * Same row lock as approve()/reject(): a concurrent verifyRecovery call
+	 * for the same request cannot race this one.
+	 */
+	@Transactional
+	public RecoveryResult verifyRecovery(String id, String orgId, String reviewedBy) {
+		RefundRequest request = refundRequestRepository.lockByIdAndOrgId(id, orgId)
+				.orElseThrow(() -> new BusinessException(ErrorCode.REFUND_REQUEST_NOT_FOUND, "Refund request not found"));
+
+		if (request.getStatus() != RefundRequestStatus.COMPLETED_NEEDS_VERIFICATION) {
+			throw new BusinessException(ErrorCode.REFUND_REQUEST_ALREADY_PROCESSED,
+					"This refund request is not awaiting verification");
+		}
+
+		RazorpayPaymentService.RefundVerification verification;
+
+		try {
+			verification = razorpayPaymentService.verifyRefund(
+					orgId, request.getBookingId(), request.getGatewayRefundId(), request.getRefundAmount());
+		} catch (Exception ex) {
+			log.warn("Refund verification could not reach Razorpay for request {}: {}", id, ex.getMessage());
+
+			request.setReviewedBy(reviewedBy);
+			request.setReviewedAt(Instant.now());
+			refundRequestRepository.save(request);
+
+			return new RecoveryResult(request, RecoveryOutcome.VERIFICATION_INCONCLUSIVE,
+					"Could not verify with Razorpay right now: " + ex.getMessage() + ". Status unchanged -- try again shortly.");
+		}
+
+		if (verification.refundId() != null) {
+			request.setStatus(RefundRequestStatus.COMPLETED);
+			request.setGatewayRefundId(verification.refundId());
+			request.setFailureReason(null);
+			request.setReviewedBy(reviewedBy);
+			request.setReviewedAt(Instant.now());
+
+			refundRequestRepository.save(request);
+			publishRefundCompleted(orgId, request);
+
+			return new RecoveryResult(request, RecoveryOutcome.ALREADY_REFUNDED,
+					"Razorpay confirms this refund already exists. Marked as completed.");
+		}
+
+		request.setStatus(RefundRequestStatus.PENDING_REVIEW);
+		request.setGatewayRefundId(null);
+		request.setReviewedBy(reviewedBy);
+		request.setReviewedAt(Instant.now());
+
+		refundRequestRepository.save(request);
+
+		return new RecoveryResult(request, RecoveryOutcome.RETRY_ELIGIBLE,
+				"Razorpay confirms no matching refund exists. This request is pending review again and can be approved.");
 	}
 
 	/* P1.7 -- same lock as approve(), so a reject() racing an approve() (or another reject()) for the same id can't both act on a stale PENDING_REVIEW read. */
