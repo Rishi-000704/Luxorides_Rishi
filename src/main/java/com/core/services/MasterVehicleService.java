@@ -33,9 +33,11 @@ import com.core.repositories.MasterVehicleRepository;
 import com.core.services.common.FileService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class MasterVehicleService {
 	private final MasterVehicleRepository masterVehicleRepository;
 	private final FileService fileService;
@@ -248,13 +250,7 @@ public class MasterVehicleService {
 
 			// Distance + time: garage → pickup → drop → garage
 			DistanceTimeResult gToPickup = locationService.calculateDistanceAndTime(garageLocation, source);
-
-			System.out.println("gToPickup: " + gToPickup.distanceKm());
-
 			DistanceTimeResult pickupToDrop = locationService.calculateDistanceAndTime(source, destination);
-
-			System.out.println("pickupToDrop: " + pickupToDrop.distanceKm());
-
 			DistanceTimeResult dropToGarage = locationService.calculateDistanceAndTime(destination, garageLocation);
 
 			double totalDistance = gToPickup.distanceKm() + pickupToDrop.distanceKm() + dropToGarage.distanceKm();
@@ -262,8 +258,34 @@ public class MasterVehicleService {
 			long totalTime = gToPickup.durationSeconds() + pickupToDrop.durationSeconds()
 					+ dropToGarage.durationSeconds();
 
-			// Convert to LOCAL if short trip
-			if (totalDistance > 40 || totalTime > 14400) {
+			/*
+			 * P0 financial-integrity guard -- this reclassification changes
+			 * which Package (and therefore which price) the customer is
+			 * shown and ultimately books, so it must not fire on
+			 * unreliable distance data. result.estimated() is true for a
+			 * haversine straight-line guess (FallbackGeoProvider) or a
+			 * stale, past-TTL cache entry served only because live
+			 * computation just failed (RouteCacheService) -- neither is
+			 * authoritative enough to override the customer's requested
+			 * duty type. When any leg is estimated, this simply does not
+			 * reclassify: the itinerary's own requested TRANSFER (and the
+			 * airport-based sub-type below) stands, exactly as if the
+			 * threshold check had never run -- never a fabricated
+			 * LOCAL/TRANSFER decision built on unreliable data.
+			 */
+			boolean allLegsTrustworthy =
+					!gToPickup.estimated() && !pickupToDrop.estimated() && !dropToGarage.estimated();
+
+			if (!allLegsTrustworthy) {
+				log.warn(
+						"Duty-type distance classification for org {} used estimated route data "
+								+ "(providers: {}, {}, {}) -- skipping the LOCAL reclassification rather than "
+								+ "risking an incorrect package/price on unreliable data",
+						orgId, gToPickup.provider(), pickupToDrop.provider(), dropToGarage.provider());
+			}
+
+			// Convert to LOCAL if short trip -- only ever decided from trustworthy data.
+			if (allLegsTrustworthy && (totalDistance > 40 || totalTime > 14400)) {
 				return DutyType.LOCAL;
 			}
 

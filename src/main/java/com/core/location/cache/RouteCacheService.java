@@ -86,7 +86,9 @@ public class RouteCacheService {
 		Optional<RouteCacheEntry> fresh = readFresh(originKey, destinationKey);
 
 		if (fresh.isPresent()) {
-			return toResult(fresh.get());
+			// Within FRESHNESS_TTL -- trustworthy enough to stand in for a live
+			// call, including for billing/pricing decisions downstream.
+			return toResult(fresh.get(), false);
 		}
 
 		String coalesceKey = originKey + ">" + destinationKey;
@@ -120,7 +122,19 @@ public class RouteCacheService {
 							originKey, destinationKey, stale.get().getCalculatedAt(),
 							liveComputationFailure.getMessage());
 
-					return toResult(stale.get());
+					// P0 financial-integrity fix -- this result is past
+					// FRESHNESS_TTL and was only reached because live
+					// computation just failed. It must be indistinguishable
+					// from any other "estimated" (non-authoritative) result
+					// to every downstream caller, exactly like a
+					// FallbackGeoProvider/haversine result -- billing-relevant
+					// callers (garage-return distance, duty-type/pricing
+					// classification) must treat estimated=true as "do not use
+					// this to create or increase a customer charge."
+					// Previously this hardcoded estimated=false here, making
+					// stale data indistinguishable from a genuinely fresh
+					// result to any caller checking the flag.
+					return toResult(stale.get(), true);
 				}
 
 				throw liveComputationFailure;
@@ -203,11 +217,11 @@ public class RouteCacheService {
 		}
 	}
 
-	private DistanceTimeResult toResult(RouteCacheEntry entry) {
+	private DistanceTimeResult toResult(RouteCacheEntry entry, boolean estimated) {
 		return new DistanceTimeResult(
 				entry.getDistanceKm(),
 				entry.getDurationSeconds(),
-				false,
+				estimated,
 				entry.getProvider(),
 				deserializeGeometry(entry.getRouteGeometryJson()));
 	}

@@ -105,6 +105,9 @@ class RouteCacheServiceTest {
 		assertEquals(18.1, result.distanceKm());
 		assertEquals(1380L, result.durationSeconds());
 		assertEquals("OPEN_ROUTE_SERVICE", result.provider());
+		// P0 -- a fresh (within-TTL) cache hit is trustworthy enough for
+		// billing/pricing decisions downstream, same as a live call.
+		assertEquals(false, result.estimated());
 		verify(supplier, never()).get();
 		verify(repository, times(1)).recordHit(eq("route-1"), any(Instant.class));
 	}
@@ -157,6 +160,17 @@ class RouteCacheServiceTest {
 
 		assertEquals(18.1, result.distanceKm());
 		assertEquals("OPEN_ROUTE_SERVICE", result.provider());
+		/*
+		 * P0 financial-integrity fix -- this result is only ever reached
+		 * because live computation just failed and the cached entry is past
+		 * FRESHNESS_TTL. It must be marked estimated=true so every
+		 * billing-relevant caller (calculateGarageReturnEstimate,
+		 * resolveEffectiveDutyType) treats it exactly like a haversine
+		 * fallback -- never authoritative for a customer charge or duty-type
+		 * classification, even though the distance/provider values
+		 * themselves are still the last real values a provider returned.
+		 */
+		assertEquals(true, result.estimated());
 	}
 
 	@Test

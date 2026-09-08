@@ -91,9 +91,11 @@ import com.core.util.EtaEstimator;
 import com.core.ws.DutyLocationChannelRegistry;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ExternalDriverDutyService {
 
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -1519,6 +1521,32 @@ public class ExternalDriverDutyService {
 
 		try {
 			DistanceTimeResult result = locationService.calculateDistanceAndTime(dropLocation, garageLocation);
+
+			/*
+			 * P0 financial-integrity guard -- this distance feeds directly
+			 * into closingKM (below, via billableClosingKm in submitEnd) and
+			 * from there into BookingUtil.calculateTotal's extraChargeableDistance,
+			 * i.e. it can directly create/increase a customer's bill.
+			 * result.estimated() is true for BOTH a haversine straight-line
+			 * guess (FallbackGeoProvider) AND a stale, past-TTL cache entry
+			 * served only because live computation just failed
+			 * (RouteCacheService) -- neither is authoritative for billing,
+			 * only for non-financial display. Treated exactly like a total
+			 * geo-calculation failure: no estimated garage-return distance is
+			 * added to the bill, so the driver's own verified odometer
+			 * reading (already captured, added separately in submitEnd)
+			 * remains the sole billed distance for this leg. Operational
+			 * route-leg display (getRouteForLeg) is unaffected -- it never
+			 * gates on this flag, by design.
+			 */
+			if (result.estimated()) {
+				log.warn(
+						"Garage-return distance for duty {} was estimated (stale cache or haversine fallback, provider={}) "
+								+ "-- excluding it from the billable distance rather than risking an incorrect customer charge",
+						entry.getDutyId(), result.provider());
+
+				return GarageReturnEstimate.zero();
+			}
 
 			int distanceKmRoundedUp = BigDecimal.valueOf(result.distanceKm())
 					.setScale(0, RoundingMode.CEILING)
