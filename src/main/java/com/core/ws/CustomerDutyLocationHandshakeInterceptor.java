@@ -13,8 +13,11 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.core.models.BookingEntry;
+import com.core.models.Client;
 import com.core.models.User;
 import com.core.repositories.BookingEntryRepository;
+import com.core.services.ClientService;
 import com.core.services.JwtService;
 
 import lombok.RequiredArgsConstructor;
@@ -23,9 +26,14 @@ import lombok.RequiredArgsConstructor;
  * Same auth shape as CustomerHandshakeInterceptor (JWT-in-query-param, since
  * native WebSocket can't set headers) -- this channel is read by the
  * customer app, keyed by dutyId rather than bookingId since a booking can
- * have multiple entries/drivers. Ownership check reuses the existing
- * BookingEntryRepository.findByDutyIdAndOrgId query, org-scoped the same
- * way ClientBookingController's booking-detail endpoint is.
+ * have multiple entries/drivers.
+ *
+ * P0 IDOR fix -- this used to only check the duty exists in this JWT's org,
+ * which let any authenticated client in the same org subscribe to another
+ * client's live vehicle GPS stream by guessing a dutyId. findByDutyIdAndOrgId
+ * JOIN FETCHes the booking, so entry.getBooking().getClientId() is safe to
+ * read here despite that association being LAZY (already fully loaded by
+ * this same query, not a proxy needing a live session).
  */
 @Component
 @RequiredArgsConstructor
@@ -34,6 +42,7 @@ public class CustomerDutyLocationHandshakeInterceptor implements HandshakeInterc
 	private final JwtService jwtService;
 	private final UserDetailsService userDetailsService;
 	private final BookingEntryRepository bookingEntryRepository;
+	private final ClientService clientService;
 
 	@Override
 	public boolean beforeHandshake(
@@ -59,8 +68,15 @@ public class CustomerDutyLocationHandshakeInterceptor implements HandshakeInterc
 				return false;
 			}
 
-			bookingEntryRepository.findByDutyIdAndOrgId(dutyId, user.getOrgId())
+			BookingEntry entry = bookingEntryRepository.findByDutyIdAndOrgId(dutyId, user.getOrgId())
 					.orElseThrow();
+
+			Client client = clientService.findByUserId(user.getId());
+
+			if (!client.getId().equals(entry.getBooking().getClientId())) {
+				response.setStatusCode(HttpStatus.UNAUTHORIZED);
+				return false;
+			}
 
 			attributes.put(DutyLocationWebSocketHandler.DUTY_ID_ATTRIBUTE, dutyId);
 			return true;

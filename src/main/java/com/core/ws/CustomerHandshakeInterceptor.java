@@ -13,8 +13,11 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.core.models.Booking;
+import com.core.models.Client;
 import com.core.models.User;
 import com.core.services.BookingService;
+import com.core.services.ClientService;
 import com.core.services.JwtService;
 
 import lombok.RequiredArgsConstructor;
@@ -23,10 +26,14 @@ import lombok.RequiredArgsConstructor;
  * Native browser WebSocket can't set an Authorization header, so the JWT
  * travels as a query param instead (?token=...) and is validated here,
  * once, at handshake time -- same JwtService calls JwtAuthenticationFilter
- * uses for every other authenticated request. Booking ownership is checked
- * with the same org-scoped rule ClientBookingController.getBookingDetail
- * already relies on (BookingService.getBooking throws if the booking isn't
- * in this JWT's org) -- not stricter, not looser.
+ * uses for every other authenticated request.
+ *
+ * P0 IDOR fix -- this used to only check that the booking exists in this
+ * JWT's org (same gap ClientBookingController.getBookingDetail had), which
+ * let any authenticated client in the same org subscribe to another
+ * client's live booking-status stream by guessing a bookingId. Now also
+ * requires the requesting client to own the booking, same check
+ * getOwnedBooking enforces on the REST fallback.
  */
 @Component
 @RequiredArgsConstructor
@@ -35,6 +42,7 @@ public class CustomerHandshakeInterceptor implements HandshakeInterceptor {
 	private final JwtService jwtService;
 	private final UserDetailsService userDetailsService;
 	private final BookingService bookingService;
+	private final ClientService clientService;
 
 	@Override
 	public boolean beforeHandshake(
@@ -60,7 +68,13 @@ public class CustomerHandshakeInterceptor implements HandshakeInterceptor {
 				return false;
 			}
 
-			bookingService.getBooking(bookingId, user.getOrgId());
+			Booking booking = bookingService.getBooking(bookingId, user.getOrgId());
+			Client client = clientService.findByUserId(user.getId());
+
+			if (!client.getId().equals(booking.getClientId())) {
+				response.setStatusCode(HttpStatus.UNAUTHORIZED);
+				return false;
+			}
 
 			attributes.put(BookingStatusWebSocketHandler.BOOKING_ID_ATTRIBUTE, bookingId);
 			return true;

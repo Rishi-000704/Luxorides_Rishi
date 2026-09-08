@@ -11,8 +11,10 @@ import com.core.gateway.VerifyPaymentDTO;
 import com.core.gateway.mock.MockPaymentService;
 import com.core.gateway.razerpay.RazorpayCheckoutPayload;
 import com.core.gateway.razerpay.RazorpayPaymentService;
+import com.core.models.Client;
 import com.core.models.enums.PaymentGateway;
 import com.core.security.SecurityContextUtil;
+import com.core.services.ClientService;
 import com.core.services.PaymentGatewayConfigService;
 
 import lombok.RequiredArgsConstructor;
@@ -26,6 +28,7 @@ public class ClientPaymentController {
 	private final MockPaymentService mockPaymentService;
 	private final PaymentGatewayConfigService paymentGatewayConfigService;
 	private final SecurityContextUtil security;
+	private final ClientService clientService;
 
 	/* ================= CREATE PAYMENT ORDER ================= */
 
@@ -37,15 +40,21 @@ public class ClientPaymentController {
 			throw new IllegalArgumentException("Payment gateway is required");
 		}
 
+		// P0 IDOR fix -- the caller's own Client identity is what proves
+		// ownership, never the bookingId supplied in the request body.
+		// Resolved once here and passed down so both gateways enforce it
+		// before doing any provider work.
+		Client client = clientService.findByUserId(security.userId());
+
 		return switch (resolveEffectiveGateway(request.gateway())) {
 
 		case RAZORPAY -> {
 			RazorpayCheckoutPayload payload = razorpayPaymentService.createRazorpayOrder(request.bookingId(),
-					security.orgId());
+					client.getId(), security.orgId());
 			yield payload;
 		}
 
-		case MOCK -> mockPaymentService.createMockOrder(request.bookingId(), security.orgId());
+		case MOCK -> mockPaymentService.createMockOrder(request.bookingId(), client.getId(), security.orgId());
 
 		default -> throw new UnsupportedOperationException("Unsupported payment gateway: " + request.gateway());
 		};

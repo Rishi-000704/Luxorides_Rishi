@@ -40,6 +40,8 @@ class MockPaymentServiceTest {
 	private static final String ORG_ID = "org-1";
 	private static final String BOOKING_ID = "booking-1";
 	private static final String DUTY_ID = "duty-1";
+	private static final String CLIENT_ID = "client-1";
+	private static final String OTHER_CLIENT_ID = "client-2";
 
 	private BookingRepository bookingRepo;
 	private PaymentRepository paymentRepo;
@@ -55,6 +57,23 @@ class MockPaymentServiceTest {
 
 		service = new MockPaymentService(bookingRepo, paymentRepo, clientBookingService, eventPublisher,
 				paymentEventAssembler);
+	}
+
+	/* ================= P0: OWNERSHIP (IDOR fix) ================= */
+
+	@Test
+	void createMockOrder_rejectsClientOwnershipMismatch_beforeCreatingAnyPayment() {
+		Booking booking = new Booking();
+		booking.setBookingId(BOOKING_ID);
+		booking.setOrgId(ORG_ID);
+		booking.setClientId(CLIENT_ID);
+		booking.setTotal(Money.INR(java.math.BigDecimal.valueOf(1000)));
+		when(bookingRepo.findByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		org.junit.jupiter.api.Assertions.assertThrows(com.core.exception.BusinessException.class,
+				() -> service.createMockOrder(BOOKING_ID, OTHER_CLIENT_ID, ORG_ID));
+
+		verify(paymentRepo, never()).save(any(Payment.class));
 	}
 
 	@Test

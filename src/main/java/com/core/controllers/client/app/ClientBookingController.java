@@ -66,8 +66,9 @@ public class ClientBookingController {
 	@PreAuthorize("isAuthenticated()")
 	public ClientBookingDTO getBookingDetail(@PathVariable String bookingId) {
 
-		var booking = clientBookingService.getBooking(bookingId, security.orgId());
-		
+		Client client = clientService.findByUserId(security.userId());
+		var booking = clientBookingService.getOwnedBooking(bookingId, client.getId(), security.orgId());
+
 		return clientBookingAssembler.toDTO(booking);
 	}
 
@@ -90,7 +91,8 @@ public class ClientBookingController {
 	@GetMapping("/invoice/{invoiceNumber}/pdf")
 	@PreAuthorize("isAuthenticated()")
 	public ResponseEntity<Resource> downloadInvoicePdf(@PathVariable String invoiceNumber) {
-		PdfStream pdf = invoiceService.getInvoicePdf(invoiceNumber, security.orgId());
+		Client client = clientService.findByUserId(security.userId());
+		PdfStream pdf = invoiceService.getInvoicePdfForClient(invoiceNumber, client.getId(), security.orgId());
 		return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=" + pdf.fileName())
 				.contentType(MediaType.APPLICATION_PDF).contentLength(pdf.contentLength()).body(pdf.resource());
 	}
@@ -103,7 +105,8 @@ public class ClientBookingController {
 	@GetMapping("/duty/{dutyId}/location")
 	@PreAuthorize("isAuthenticated()")
 	public ResponseEntity<DriverDutyLocationResponse> getDutyLocation(@PathVariable String dutyId) {
-		return clientBookingService.getDutyLocation(dutyId, security.orgId())
+		Client client = clientService.findByUserId(security.userId());
+		return clientBookingService.getDutyLocation(dutyId, client.getId(), security.orgId())
 				.map(ResponseEntity::ok)
 				.orElseGet(() -> ResponseEntity.noContent().build());
 	}

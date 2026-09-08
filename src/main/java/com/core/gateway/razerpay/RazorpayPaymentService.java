@@ -23,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.core.events.PaymentConfirmedEvent;
 import com.core.events.assembler.PaymentEventAssembler;
+import com.core.exception.BusinessException;
+import com.core.exception.ErrorCode;
 import com.core.models.Booking;
 import com.core.models.Payment;
 import com.core.models.embedded.Money;
@@ -91,7 +93,7 @@ public class RazorpayPaymentService {
 
 	/* ================= CREATE ORDER + CHECKOUT PAYLOAD ================= */
 
-	public RazorpayCheckoutPayload createRazorpayOrder(String bookingId, String orgId) throws Exception {
+	public RazorpayCheckoutPayload createRazorpayOrder(String bookingId, String clientId, String orgId) throws Exception {
 
 		RazorpayCredentials credentials = razorpayClientFactory.credentials(orgId);
 		razorpayClientFactory.assertCheckoutEnabled(credentials);
@@ -110,6 +112,17 @@ public class RazorpayPaymentService {
 		 */
 		Booking booking = bookingRepo.lockByBookingIdAndOrgId(bookingId, orgId)
 				.orElseThrow(() -> new IllegalStateException("Booking not found"));
+
+		/*
+		 * P0 IDOR fix -- must be checked before ANY Razorpay call (the reuse
+		 * path's orders.fetch below included), and before this booking's
+		 * client name/phone/email are ever read into a checkout payload.
+		 * Without this, a customer could create/reuse a live payment order --
+		 * and see another customer's PII -- for a bookingId they don't own.
+		 */
+		if (!clientId.equals(booking.getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "This booking does not belong to you");
+		}
 
 		Money pending = calculatePendingAmount(booking);
 

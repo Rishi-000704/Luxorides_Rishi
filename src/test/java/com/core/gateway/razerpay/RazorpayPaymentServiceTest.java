@@ -54,6 +54,8 @@ class RazorpayPaymentServiceTest {
 
 	private static final String ORG_ID = "org-1";
 	private static final String BOOKING_ID = "booking-1";
+	private static final String CLIENT_ID = "client-1";
+	private static final String OTHER_CLIENT_ID = "client-2";
 
 	private RazorpayClientFactory clientFactory;
 	private BookingRepository bookingRepo;
@@ -93,6 +95,7 @@ class RazorpayPaymentServiceTest {
 		Booking booking = new Booking();
 		booking.setBookingId(BOOKING_ID);
 		booking.setOrgId(ORG_ID);
+		booking.setClientId(CLIENT_ID);
 		booking.setStatus(BookingStatus.DRAFT);
 		booking.setTotal(Money.INR(totalAmount));
 
@@ -140,7 +143,7 @@ class RazorpayPaymentServiceTest {
 		Order createdOrder = new Order(new JSONObject().put("id", "order_new123"));
 		when(orderClient.create(any(JSONObject.class))).thenReturn(createdOrder);
 
-		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		assertEquals("order_new123", payload.getOrderId());
 		assertEquals(100000L, payload.getAmount());
@@ -161,7 +164,7 @@ class RazorpayPaymentServiceTest {
 		when(orderClient.fetch("order_existing456"))
 				.thenReturn(new Order(new JSONObject().put("status", "created")));
 
-		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		assertEquals("order_existing456", payload.getOrderId());
 		verify(orderClient, never()).create(any(JSONObject.class));
@@ -183,7 +186,7 @@ class RazorpayPaymentServiceTest {
 		when(orderClient.fetch("order_existing456"))
 				.thenReturn(new Order(new JSONObject().put("status", "attempted")));
 
-		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		assertEquals("order_existing456", payload.getOrderId());
 		verify(orderClient, never()).create(any(JSONObject.class));
@@ -202,7 +205,7 @@ class RazorpayPaymentServiceTest {
 		when(orderClient.fetch("order_already_paid"))
 				.thenReturn(new Order(new JSONObject().put("status", "paid")));
 
-		assertThrows(IllegalStateException.class, () -> service.createRazorpayOrder(BOOKING_ID, ORG_ID));
+		assertThrows(IllegalStateException.class, () -> service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID));
 
 		verify(orderClient, never()).create(any(JSONObject.class));
 		verify(paymentRepo, never()).save(any(Payment.class));
@@ -220,7 +223,7 @@ class RazorpayPaymentServiceTest {
 				.thenReturn(Optional.of(existing));
 		when(orderClient.fetch("order_unreachable")).thenThrow(new RazorpayException("network error"));
 
-		assertThrows(IllegalStateException.class, () -> service.createRazorpayOrder(BOOKING_ID, ORG_ID));
+		assertThrows(IllegalStateException.class, () -> service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID));
 
 		// Never create a second order while Razorpay's state can't be established --
 		// that would risk a duplicate charge.
@@ -241,7 +244,7 @@ class RazorpayPaymentServiceTest {
 		Order createdOrder = new Order(new JSONObject().put("id", "order_fresh999"));
 		when(orderClient.create(any(JSONObject.class))).thenReturn(createdOrder);
 
-		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		assertEquals("order_fresh999", payload.getOrderId());
 		verify(orderClient, times(1)).create(any(JSONObject.class));
@@ -261,7 +264,7 @@ class RazorpayPaymentServiceTest {
 		Order createdOrder = new Order(new JSONObject().put("id", "order_fresh111"));
 		when(orderClient.create(any(JSONObject.class))).thenReturn(createdOrder);
 
-		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		assertEquals("order_fresh111", payload.getOrderId());
 		verify(orderClient, times(1)).create(any(JSONObject.class));
@@ -277,7 +280,7 @@ class RazorpayPaymentServiceTest {
 		when(orderClient.create(any(JSONObject.class)))
 				.thenReturn(new Order(new JSONObject().put("id", "order_x")));
 
-		service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		// Reuse lookup is scoped by orgId + bookingId together -- structurally
 		// impossible to match another org's or another booking's payment.
@@ -294,10 +297,49 @@ class RazorpayPaymentServiceTest {
 		when(orderClient.create(any(JSONObject.class)))
 				.thenReturn(new Order(new JSONObject().put("id", "order_y")));
 
-		service.createRazorpayOrder(BOOKING_ID, ORG_ID);
+		service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
 
 		verify(bookingRepo, times(1)).lockByBookingIdAndOrgId(BOOKING_ID, ORG_ID);
 		verify(bookingRepo, never()).findByBookingIdAndOrgId(any(), any());
+	}
+
+	/* ================= P0: OWNERSHIP (IDOR fix) ================= */
+
+	/*
+	 * A customer must never be able to create/reuse a Razorpay order -- or
+	 * see the booking owner's name/phone/email in the returned checkout
+	 * payload -- for a bookingId they don't own, even within the same org.
+	 * The ownership check must reject before ANY Razorpay call: neither the
+	 * reuse path's orders.fetch nor a fresh orders.create may fire.
+	 */
+	@Test
+	void createOrder_rejectsClientOwnershipMismatch_beforeAnyRazorpayCall() throws Exception {
+		Booking booking = bookingWithPending(new BigDecimal("1000.00"), null);
+		when(bookingRepo.lockByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+
+		assertThrows(com.core.exception.BusinessException.class,
+				() -> service.createRazorpayOrder(BOOKING_ID, OTHER_CLIENT_ID, ORG_ID));
+
+		verify(orderClient, never()).fetch(anyString());
+		verify(orderClient, never()).create(any(JSONObject.class));
+		verify(paymentRepo, never()).save(any(Payment.class));
+		verify(paymentRepo, never())
+				.findFirstByOrgIdAndBooking_BookingIdAndGatewayAndStatusOrderByCreatedAtDesc(any(), any(), any(), any());
+	}
+
+	@Test
+	void createOrder_ownerCreatesTheirOwnOrder_succeeds() throws Exception {
+		Booking booking = bookingWithPending(new BigDecimal("1000.00"), null);
+		when(bookingRepo.lockByBookingIdAndOrgId(BOOKING_ID, ORG_ID)).thenReturn(Optional.of(booking));
+		when(paymentRepo.findFirstByOrgIdAndBooking_BookingIdAndGatewayAndStatusOrderByCreatedAtDesc(
+				ORG_ID, BOOKING_ID, PaymentGateway.RAZORPAY, PaymentStatus.INITIATED))
+				.thenReturn(Optional.empty());
+		when(orderClient.create(any(JSONObject.class)))
+				.thenReturn(new Order(new JSONObject().put("id", "order_owner")));
+
+		RazorpayCheckoutPayload payload = service.createRazorpayOrder(BOOKING_ID, CLIENT_ID, ORG_ID);
+
+		assertEquals("order_owner", payload.getOrderId());
 	}
 
 	/* ================= A3: PAYMENT VERIFY ================= */

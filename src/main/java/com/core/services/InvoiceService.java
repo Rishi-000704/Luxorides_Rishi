@@ -391,6 +391,26 @@ public class InvoiceService {
 		return pdfService.generateInvoicePdfStream(invoice);
 	}
 
+	/*
+	 * P0 IDOR fix -- getInvoicePdf above is org-scoped only, which is correct
+	 * for its other caller (EmployeeInvoiceController: an org employee may
+	 * legitimately download any invoice in their org). The customer-facing
+	 * download must additionally prove the requesting client owns the
+	 * invoice, since invoice numbers are sequential and easily guessed.
+	 */
+	@Transactional(readOnly = true)
+	public PdfStream getInvoicePdfForClient(String invoiceNumber, String clientId, String orgId) {
+
+		Invoice invoice = invoiceRepository.findInvoiceByInvoiceNumberAndOrgId(invoiceNumber, orgId)
+				.orElseThrow(() -> new NotFoundException(ErrorCode.INVOICE_NOT_FOUND, "Invoice not found"));
+
+		if (!clientId.equals(invoice.getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "This invoice does not belong to you");
+		}
+
+		return pdfService.generateInvoicePdfStream(invoice);
+	}
+
 	@Transactional
 	public PdfStream reloadInvoicePdf(String bookingId, String orgId) {
 

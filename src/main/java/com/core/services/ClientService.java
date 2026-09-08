@@ -196,9 +196,22 @@ public class ClientService {
 		return this.get(passenger.getClientId(), orgId);
 	}
 
+	/*
+	 * P0 IDOR fix -- previously fetched by id only, with no check that the
+	 * passenger being edited actually belongs to the caller (passenger.clientId
+	 * here is always the CALLER's own id -- see PassengerController.update,
+	 * which stamps it before calling this). Any authenticated client could
+	 * overwrite another client's passenger name/email/phone by guessing a
+	 * passengerId. Same ownership check deletePassenger already applies.
+	 */
 	@Transactional
 	public Client updatePassenger(Passenger passenger, String orgId) {
 		Passenger local = this.getPassenger(passenger.getId());
+
+		if (!local.getClientId().equals(passenger.getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "Unauthorized passenger access.");
+		}
+
 		local.setName(passenger.getName());
 		local.setEmail(passenger.getEmail());
 		local.setPhone(passenger.getPhone());

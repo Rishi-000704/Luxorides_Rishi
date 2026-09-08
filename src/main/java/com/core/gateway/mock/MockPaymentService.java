@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.core.events.PaymentConfirmedEvent;
 import com.core.events.assembler.PaymentEventAssembler;
+import com.core.exception.BusinessException;
+import com.core.exception.ErrorCode;
 import com.core.gateway.razerpay.QrPaymentStatusResponse;
 import com.core.gateway.razerpay.RazorpayCheckoutPayload;
 import com.core.gateway.razerpay.RazorpayQrPayload;
@@ -51,10 +53,15 @@ public class MockPaymentService {
 
 	/* ================= CREATE ORDER + CHECKOUT PAYLOAD ================= */
 
-	public RazorpayCheckoutPayload createMockOrder(String bookingId, String orgId) {
+	public RazorpayCheckoutPayload createMockOrder(String bookingId, String clientId, String orgId) {
 
 		Booking booking = bookingRepo.findByBookingIdAndOrgId(bookingId, orgId)
 				.orElseThrow(() -> new IllegalStateException("Booking not found"));
+
+		// P0 IDOR fix -- same ownership guard as RazorpayPaymentService.createRazorpayOrder.
+		if (!clientId.equals(booking.getClientId())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED, "This booking does not belong to you");
+		}
 
 		Money pending = calculatePendingAmount(booking);
 
