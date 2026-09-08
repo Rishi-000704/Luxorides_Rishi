@@ -22,7 +22,7 @@ import com.core.models.DeviceToken;
 import com.core.models.enums.NotificationRecipientType;
 import com.core.repositories.DeviceTokenRepository;
 import com.core.repositories.NotificationRepository;
-import com.core.services.notification.FcmPushService;
+import com.core.services.notification.PushNotificationService;
 
 /*
  * Covers two behaviors the Phase 2 dispatch fix depends on, both shared by
@@ -38,15 +38,15 @@ class NotificationServiceTest {
 
 	private NotificationRepository notificationRepository;
 	private DeviceTokenRepository deviceTokenRepository;
-	private FcmPushService fcmPushService;
+	private PushNotificationService pushNotificationService;
 	private NotificationService service;
 
 	@BeforeEach
 	void setUp() {
 		notificationRepository = mock(NotificationRepository.class);
 		deviceTokenRepository = mock(DeviceTokenRepository.class);
-		fcmPushService = mock(FcmPushService.class);
-		service = new NotificationService(notificationRepository, deviceTokenRepository, fcmPushService);
+		pushNotificationService = mock(PushNotificationService.class);
+		service = new NotificationService(notificationRepository, deviceTokenRepository, pushNotificationService);
 	}
 
 	@Test
@@ -88,7 +88,7 @@ class NotificationServiceTest {
 		when(deviceTokenRepository.findByOrgIdAndRecipientTypeAndRecipientId(
 				"org-1", NotificationRecipientType.DRIVER, "driver-1"))
 				.thenReturn(List.of(token("stale-token"), token("live-token")));
-		when(fcmPushService.send(any(), anyString(), anyString())).thenReturn(List.of("stale-token"));
+		when(pushNotificationService.send(any(), anyString(), anyString())).thenReturn(List.of("stale-token"));
 
 		service.create("org-1", NotificationRecipientType.DRIVER, "driver-1",
 				"New Duty Assigned", "You have a new duty assignment.", "DUTY_ASSIGNED", "booking-1", "duty-1");
@@ -104,7 +104,7 @@ class NotificationServiceTest {
 		when(deviceTokenRepository.findByOrgIdAndRecipientTypeAndRecipientId(
 				"org-1", NotificationRecipientType.DRIVER, "driver-1"))
 				.thenReturn(List.of(token("live-token")));
-		when(fcmPushService.send(any(), anyString(), anyString())).thenReturn(List.of());
+		when(pushNotificationService.send(any(), anyString(), anyString())).thenReturn(List.of());
 
 		service.create("org-1", NotificationRecipientType.DRIVER, "driver-1",
 				"New Duty Assigned", "You have a new duty assignment.", "DUTY_ASSIGNED", "booking-1", "duty-1");

@@ -15,7 +15,7 @@ import com.core.models.Notification;
 import com.core.models.enums.NotificationRecipientType;
 import com.core.repositories.DeviceTokenRepository;
 import com.core.repositories.NotificationRepository;
-import com.core.services.notification.FcmPushService;
+import com.core.services.notification.PushNotificationService;
 
 import lombok.RequiredArgsConstructor;
 
@@ -25,7 +25,7 @@ public class NotificationService {
 
 	private final NotificationRepository notificationRepository;
 	private final DeviceTokenRepository deviceTokenRepository;
-	private final FcmPushService fcmPushService;
+	private final PushNotificationService pushNotificationService;
 
 	/*
 	 * Called by NotificationEventListener off existing domain events -- always
@@ -66,7 +66,7 @@ public class NotificationService {
 				.map(DeviceToken::getToken)
 				.toList();
 
-		List<String> staleTokens = fcmPushService.send(tokens, title, body);
+		List<String> staleTokens = pushNotificationService.send(tokens, title, body);
 		if (!staleTokens.isEmpty()) {
 			deviceTokenRepository.deleteAllByTokenIn(staleTokens);
 		}
