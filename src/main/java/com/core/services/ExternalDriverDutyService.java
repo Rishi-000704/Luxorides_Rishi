@@ -786,6 +786,24 @@ public class ExternalDriverDutyService {
 			);
 		}
 
+		/*
+		 * P0 integrity guard -- pickup OTP verification is the backend's only
+		 * real confirmation that the driver actually reached and picked up
+		 * the client before the trip is billed and finalized. Checked here,
+		 * against the entry's own authoritative pickupOtpVerifiedAt (never a
+		 * client-supplied flag, never inferred from local Chauffeur
+		 * navigation state), before any checkpoint/entry/booking mutation
+		 * below -- a rejected completion must not partially finalize
+		 * anything. This is the only place DutyStatus transitions to
+		 * COMPLETED, so gating it here closes every completion path at once.
+		 */
+		if (entry.getPickupOtpVerifiedAt() == null) {
+			throw new BusinessException(
+					ErrorCode.PICKUP_OTP_NOT_VERIFIED,
+					"Pickup OTP must be verified before this duty can be completed"
+			);
+		}
+
 		validateKm(request.odometerKm(), "End KM is required");
 
 		if (entry.getStartingKM() == null) {
