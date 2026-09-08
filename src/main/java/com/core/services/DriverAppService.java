@@ -22,6 +22,7 @@ import com.core.models.Driver;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DriverDutyCheckpointType;
 import com.core.models.enums.DutyStatus;
+import com.core.models.enums.NotificationRecipientType;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverRepository;
@@ -50,6 +51,21 @@ public class DriverAppService {
 	private final DriverRepository driverRepository;
 	private final ExternalDriverDutyService externalDriverDutyService;
 	private final DriverDutyCheckpointRepository checkpointRepository;
+	private final NotificationService notificationService;
+
+	/*
+	 * Registers this driver's push token for assignment-notification delivery.
+	 * The recipient id always comes from the JWT-resolved driver record, never
+	 * from client input -- there is no driverId parameter for a caller to
+	 * supply. Reuses the existing generic DeviceToken upsert (same one the
+	 * CLIENT notification path already uses), just under
+	 * NotificationRecipientType.DRIVER.
+	 */
+	@Transactional
+	public void registerDeviceToken(String orgId, String userId, String token, String platform) {
+		Driver driver = resolveDriver(orgId, userId);
+		notificationService.registerDeviceToken(orgId, NotificationRecipientType.DRIVER, driver.getId(), token, platform);
+	}
 
 	@Transactional(readOnly = true)
 	public Page<DutySummaryForDriverDTO> getActiveDuties(String orgId, String userId, Pageable pageable) {

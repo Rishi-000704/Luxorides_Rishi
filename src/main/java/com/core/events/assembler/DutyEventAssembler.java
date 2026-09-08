@@ -25,7 +25,7 @@ public class DutyEventAssembler {
 				entry.getPack().getDutyType(), DateFormatUtil.display(entry.getReportingTime()),
 				entry.getReportingLocation().getFormattedAddress(),
 
-				entry.getDriver().getName().getDisplayName(), entry.getDriver().getPhone(),
+				entry.getDriverId(), entry.getDriver().getName().getDisplayName(), entry.getDriver().getPhone(),
 
 				entry.getAllotedVehicle().getMasterVehicle().getName(),
 				entry.getAllotedVehicle().getMasterVehicle().getCategory(),
@@ -44,7 +44,7 @@ public class DutyEventAssembler {
 				entry.getPack().getDutyType(), DateFormatUtil.display(entry.getReportingTime()),
 				entry.getReportingLocation().getFormattedAddress(),
 
-				entry.getDriver().getName().getDisplayName(), entry.getDriver().getPhone(),
+				entry.getDriverId(), entry.getDriver().getName().getDisplayName(), entry.getDriver().getPhone(),
 
 				entry.getAllotedVehicle().getMasterVehicle().getName(),
 				entry.getAllotedVehicle().getMasterVehicle().getCategory(),

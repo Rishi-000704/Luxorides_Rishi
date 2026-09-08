@@ -15,6 +15,7 @@ public record DutyAllottedEvent(
 		String reportingDate,
 		String reportingLocation,
 
+		String driverId,
 		String driverName,
 		String driverPhone,
 

@@ -10,6 +10,6 @@ public record DutyReAllottedEvent(
 
 		DutyType dutyType, String reportingDate, String reportingLocation,
 
-		String driverName, String driverPhone,
+		String driverId, String driverName, String driverPhone,
 
 		String vehicleName, String vehicleType, String vehicleNumber) {}

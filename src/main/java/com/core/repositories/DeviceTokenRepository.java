@@ -16,4 +16,6 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, String
 
 	List<DeviceToken> findByOrgIdAndRecipientTypeAndRecipientId(
 			String orgId, NotificationRecipientType recipientType, String recipientId);
+
+	void deleteAllByTokenIn(List<String> tokens);
 }

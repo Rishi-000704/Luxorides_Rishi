@@ -1,6 +1,7 @@
 package com.core.services.notification;
 
 import java.io.FileInputStream;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +13,7 @@ import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.FirebaseMessagingException;
 import com.google.firebase.messaging.Message;
+import com.google.firebase.messaging.MessagingErrorCode;
 import com.google.firebase.messaging.Notification;
 
 import jakarta.annotation.PostConstruct;
@@ -23,8 +25,9 @@ import lombok.extern.slf4j.Slf4j;
  * account. This deployment has no Firebase project configured, so at
  * startup it detects that, logs once, and every send() call afterward is a
  * safe no-op. It never reports success it didn't actually achieve: send()
- * returns a boolean the caller can use to decide whether to fall back to
- * (or rely solely on) the in-app notification feed.
+ * returns the tokens FCM reported as permanently unregistered, so the caller
+ * can prune them -- push delivery itself is always best-effort and never
+ * blocks the in-app notification feed, which is written first regardless.
  */
 @Service
 @Slf4j
@@ -66,12 +69,18 @@ public class FcmPushService {
 		return enabled;
 	}
 
-	public boolean send(List<String> deviceTokens, String title, String body) {
-		if (!enabled || deviceTokens == null || deviceTokens.isEmpty()) {
-			return false;
-		}
+	/*
+	 * Returns the subset of deviceTokens that FCM reported as permanently
+	 * unregistered (app uninstalled / token rotated) so the caller can prune
+	 * them from DeviceToken -- the "simplest safe mechanism" for stale-token
+	 * cleanup: no scheduled job, just pruning inline on the next failed send.
+	 */
+	public List<String> send(List<String> deviceTokens, String title, String body) {
+		List<String> staleTokens = new ArrayList<>();
 
-		boolean anySucceeded = false;
+		if (!enabled || deviceTokens == null || deviceTokens.isEmpty()) {
+			return staleTokens;
+		}
 
 		for (String token : deviceTokens) {
 			try {
@@ -81,12 +90,14 @@ public class FcmPushService {
 						.build();
 
 				FirebaseMessaging.getInstance().send(message);
-				anySucceeded = true;
 			} catch (FirebaseMessagingException ex) {
 				log.warn("Failed to deliver push to device token (may be stale): {}", ex.getMessage());
+				if (ex.getMessagingErrorCode() == MessagingErrorCode.UNREGISTERED) {
+					staleTokens.add(token);
+				}
 			}
 		}
 
-		return anySucceeded;
+		return staleTokens;
 	}
 }

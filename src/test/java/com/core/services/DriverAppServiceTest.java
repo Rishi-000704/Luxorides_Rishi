@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -28,6 +29,7 @@ import com.core.models.BookingEntry;
 import com.core.models.Driver;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
+import com.core.models.enums.NotificationRecipientType;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverRepository;
@@ -50,6 +52,7 @@ class DriverAppServiceTest {
 	private DriverRepository driverRepository;
 	private ExternalDriverDutyService externalDriverDutyService;
 	private DriverDutyCheckpointRepository checkpointRepository;
+	private NotificationService notificationService;
 	private DriverAppService service;
 	private Driver driver;
 
@@ -59,13 +62,34 @@ class DriverAppServiceTest {
 		driverRepository = mock(DriverRepository.class);
 		externalDriverDutyService = mock(ExternalDriverDutyService.class);
 		checkpointRepository = mock(DriverDutyCheckpointRepository.class);
-		service = new DriverAppService(bookingEntryRepository, driverRepository, externalDriverDutyService, checkpointRepository);
+		notificationService = mock(NotificationService.class);
+		service = new DriverAppService(
+				bookingEntryRepository, driverRepository, externalDriverDutyService, checkpointRepository, notificationService);
 
 		driver = new Driver();
 		driver.setId(DRIVER_ID);
 		driver.setOrgId(ORG_ID);
 		driver.setUserId(USER_ID);
 		when(driverRepository.findByUserId(USER_ID)).thenReturn(Optional.of(driver));
+	}
+
+	@Test
+	void registerDeviceToken_derivesDriverFromJwt_neverFromClientInput() {
+		// The method signature itself has no driverId parameter -- the recipient
+		// is always the driver resolved from (orgId, userId) off the JWT, exactly
+		// like every other /driver/app/** call in this service.
+		service.registerDeviceToken(ORG_ID, USER_ID, "expo-token-abc", "ANDROID");
+
+		verify(notificationService).registerDeviceToken(
+				ORG_ID, NotificationRecipientType.DRIVER, DRIVER_ID, "expo-token-abc", "ANDROID");
+	}
+
+	@Test
+	void registerDeviceToken_rejectsCallerWithNoMatchingDriverRecord() {
+		when(driverRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+		assertThrows(NotFoundException.class,
+				() -> service.registerDeviceToken(ORG_ID, USER_ID, "expo-token-abc", "ANDROID"));
 	}
 
 	@Test

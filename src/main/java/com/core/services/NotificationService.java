@@ -66,7 +66,10 @@ public class NotificationService {
 				.map(DeviceToken::getToken)
 				.toList();
 
-		fcmPushService.send(tokens, title, body);
+		List<String> staleTokens = fcmPushService.send(tokens, title, body);
+		if (!staleTokens.isEmpty()) {
+			deviceTokenRepository.deleteAllByTokenIn(staleTokens);
+		}
 	}
 
 	@Transactional(readOnly = true)
