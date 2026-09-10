@@ -1,9 +1,8 @@
 package com.core.location.orchestrator;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.stereotype.Component;
@@ -21,9 +20,34 @@ public class GeoProviderChain {
 
 	private final List<GeoProvider> providers;
 
-	private final Map<String, String> stateCache = new ConcurrentHashMap<>();
-	private final Map<String, String> cityCache = new ConcurrentHashMap<>();
-	private final Map<String, Boolean> airportCache = new ConcurrentHashMap<>();
+	/*
+	 * Phase B -- these three were previously plain unbounded
+	 * ConcurrentHashMaps: correct while the app runs, but their key space is
+	 * every distinct address/place-id/lat-lng this org's users ever enter,
+	 * unbounded over the process's lifetime -- pure growth, no eviction.
+	 *
+	 * All three are Category 1 (static/reference geographic data, exactly
+	 * this task's own examples): what state or city a location is in, and
+	 * whether it's an airport, does not change on any timescale this app's
+	 * caching could plausibly go stale against -- administrative boundaries
+	 * and airport locations shift over years, not days. So the 30-day TTL
+	 * below is not tracking data volatility the way RouteCacheService's 24h
+	 * TTL tracks route/traffic conditions; it exists purely as a self-heal
+	 * window against a provider data correction or a future
+	 * normalization/geocoding logic change, long enough that the cache stays
+	 * genuinely effective between deploys, short enough to recover within a
+	 * month without needing an eviction job. maxSize=5000 per cache is a
+	 * deliberately generous, reasoned bound (each entry is one short string
+	 * or boolean, so even 5000 is a trivial memory footprint) rather than a
+	 * measured working-set size -- no production traffic data exists yet to
+	 * derive a precise number from.
+	 */
+	private static final int MAX_CACHE_ENTRIES = 5000;
+	private static final Duration REFERENCE_DATA_TTL = Duration.ofDays(30);
+
+	private final BoundedTtlCache<String, String> stateCache = new BoundedTtlCache<>(MAX_CACHE_ENTRIES, REFERENCE_DATA_TTL);
+	private final BoundedTtlCache<String, String> cityCache = new BoundedTtlCache<>(MAX_CACHE_ENTRIES, REFERENCE_DATA_TTL);
+	private final BoundedTtlCache<String, Boolean> airportCache = new BoundedTtlCache<>(MAX_CACHE_ENTRIES, REFERENCE_DATA_TTL);
 
 	public GeoProviderChain(List<GeoProvider> providers) {
 		this.providers = providers;
