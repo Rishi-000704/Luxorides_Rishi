@@ -6,16 +6,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
+import com.core.dtos.driverduty.DriverDutyLocationResponse;
 import com.core.dtos.driverduty.DutyRouteLegResponse;
 import com.core.events.assembler.PaymentEventAssembler;
 import com.core.exception.BusinessException;
@@ -28,6 +34,7 @@ import com.core.models.Booking;
 import com.core.models.BookingEntry;
 import com.core.models.DriverDutyAccessToken;
 import com.core.models.embedded.AddressSnapshot;
+import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.BookingRepository;
 import com.core.repositories.DriverDutyAccessTokenRepository;
@@ -56,12 +63,15 @@ class ExternalDriverDutyServiceRouteTest {
 
 	private DriverDutyTokenValidator tokenValidator;
 	private LocationService locationService;
+	private DriverDutyLiveLocationRepository liveLocationRepository;
 	private ExternalDriverDutyService service;
 
 	@BeforeEach
 	void setUp() {
 		tokenValidator = mock(DriverDutyTokenValidator.class);
 		locationService = mock(LocationService.class);
+		liveLocationRepository = mock(DriverDutyLiveLocationRepository.class);
+		when(liveLocationRepository.findByDutyId(any())).thenReturn(Optional.empty());
 
 		service = new ExternalDriverDutyService(
 				mock(BookingEntryRepository.class),
@@ -76,7 +86,7 @@ class ExternalDriverDutyServiceRouteTest {
 				mock(PaymentGatewayConfigService.class),
 				tokenValidator,
 				mock(ApplicationEventPublisher.class),
-				mock(DriverDutyLiveLocationRepository.class),
+				liveLocationRepository,
 				mock(DutyLocationChannelRegistry.class),
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
@@ -178,5 +188,98 @@ class ExternalDriverDutyServiceRouteTest {
 		stubToken(entry);
 
 		assertThrows(BusinessException.class, () -> service.getRouteForLeg(RAW_TOKEN, "NOWHERE"));
+	}
+
+	/*
+	 * The four tests above stub calculateDistanceAndTime(any(), any()) --
+	 * they prove a route comes back, but not that each leg is routed
+	 * between the RIGHT two waypoints. A "reversed" or "reused" bug (e.g.
+	 * DROP leg accidentally computed as garage->pickup again, or GARAGE leg
+	 * computed as a mirror of PICKUP instead of an independent drop->garage
+	 * call) would still pass every test above. This is the test Phase 19
+	 * of the routing audit asks for: capture the exact coordinates handed
+	 * to the routing provider for each leg and assert none of them get
+	 * confused with each other, using three waypoints that are not
+	 * symmetric (no leg's distance/bearing accidentally matches another's).
+	 */
+	@Test
+	void everyLeg_isRoutedBetweenItsOwnWaypoints_neverReversedOrReused() {
+		BookingEntry entry = entryWithWaypoints(); // garage=(28.60,77.10) pickup=(28.55,77.20) drop=(28.65,77.30)
+		stubToken(entry);
+		when(locationService.calculateDistanceAndTime(any(), any()))
+				.thenReturn(new DistanceTimeResult(1.0, 60, false, "OPEN_ROUTE_SERVICE", List.of()));
+
+		ArgumentCaptor<AddressSnapshot> fromCaptor = ArgumentCaptor.forClass(AddressSnapshot.class);
+		ArgumentCaptor<AddressSnapshot> toCaptor = ArgumentCaptor.forClass(AddressSnapshot.class);
+
+		service.getRouteForLeg(RAW_TOKEN, "PICKUP");
+		service.getRouteForLeg(RAW_TOKEN, "DROP");
+		service.getRouteForLeg(RAW_TOKEN, "GARAGE");
+
+		verify(locationService, org.mockito.Mockito.times(3))
+				.calculateDistanceAndTime(fromCaptor.capture(), toCaptor.capture());
+
+		List<AddressSnapshot> froms = fromCaptor.getAllValues();
+		List<AddressSnapshot> tos = toCaptor.getAllValues();
+
+		// PICKUP leg: garage -> pickup (A -> B), not pickup -> garage.
+		assertEquals(28.60, froms.get(0).getLatitude());
+		assertEquals(28.55, tos.get(0).getLatitude());
+
+		// DROP leg: pickup -> drop (B -> C), never re-deriving from garage.
+		assertEquals(28.55, froms.get(1).getLatitude());
+		assertEquals(28.65, tos.get(1).getLatitude());
+
+		// GARAGE leg: drop -> garage (C -> A), independently -- NOT the
+		// PICKUP leg run backwards (which would be pickup -> garage) and
+		// NOT a reuse of the DROP leg's "to" (which would leave it at drop).
+		assertEquals(28.65, froms.get(2).getLatitude());
+		assertEquals(28.60, tos.get(2).getLatitude());
+
+		// The three legs are pairwise distinct calls -- proves C->A was not
+		// silently satisfied by reusing the A->B or B->C result.
+		assertFalse(froms.get(2).getLatitude().equals(froms.get(0).getLatitude())
+				&& tos.get(2).getLatitude().equals(tos.get(0).getLatitude()));
+	}
+
+	private DriverDutyLocationPingRequest pingAt(double lat, double lng) {
+		return new DriverDutyLocationPingRequest(lat, lng, 5.0, 0.0, 12.0, Instant.now());
+	}
+
+	/*
+	 * DutyStatus.RUNNING covers both garage->pickup and pickup->drop --
+	 * verifies the live-ping ETA (broadcast to the customer app's tracking
+	 * map, see DutyLocationChannelRegistry) targets the leg the driver is
+	 * actually on, not unconditionally the final drop location.
+	 */
+	@Test
+	void submitLocationPing_beforePickupVerified_etaTargetsPickup_notDrop() {
+		BookingEntry entry = entryWithWaypoints();
+		entry.setStatus(DutyStatus.RUNNING);
+		entry.setPickupOtpVerifiedAt(null); // driver has not reached pickup yet
+		stubToken(entry);
+
+		// Driver is essentially AT the pickup point (28.55,77.20), but far
+		// from the eventual drop (28.65,77.30, ~11.7km away).
+		DriverDutyLocationResponse response = service.submitLocationPing(RAW_TOKEN, pingAt(28.5501, 77.2001));
+
+		assertTrue(response.etaEstimated());
+		assertTrue(response.distanceRemainingKm() != null && response.distanceRemainingKm() < 1.0,
+				"distanceRemainingKm should be tiny (driver is at pickup), was " + response.distanceRemainingKm());
+	}
+
+	@Test
+	void submitLocationPing_afterPickupVerified_etaTargetsDrop() {
+		BookingEntry entry = entryWithWaypoints();
+		entry.setStatus(DutyStatus.RUNNING);
+		entry.setPickupOtpVerifiedAt(Instant.now()); // pickup already done, en route to drop
+		stubToken(entry);
+
+		// Driver is still at the pickup point -- now ~11.7km from drop,
+		// which the response must reflect once pickup is behind them.
+		DriverDutyLocationResponse response = service.submitLocationPing(RAW_TOKEN, pingAt(28.55, 77.20));
+
+		assertTrue(response.distanceRemainingKm() != null && response.distanceRemainingKm() > 5.0,
+				"distanceRemainingKm should reflect distance to drop, was " + response.distanceRemainingKm());
 	}
 }

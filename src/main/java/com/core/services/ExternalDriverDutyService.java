@@ -1307,8 +1307,22 @@ public class ExternalDriverDutyService {
 			);
 		}
 
+		/*
+		 * DutyStatus.RUNNING spans both the garage->pickup leg AND the
+		 * pickup->drop leg -- it flips at submitStart, not at pickup OTP
+		 * verification. Targeting dropLocation unconditionally meant a
+		 * driver still on the way to pickup got an ETA/distance-remaining
+		 * against their eventual drop-off instead of the pickup point they
+		 * were actually headed to -- and this response is broadcast live to
+		 * the customer app's tracking map (DutyLocationChannelRegistry),
+		 * so that wrong figure was customer-visible, not just internal.
+		 */
+		AddressSnapshot etaTarget = entry.getPickupOtpVerifiedAt() == null
+				? entry.getReportingLocation()
+				: entry.getDropLocation();
+
 		EtaEstimator.Estimate eta = EtaEstimator.estimate(
-				entry.getDropLocation(),
+				etaTarget,
 				location.getLatitude(),
 				location.getLongitude(),
 				location.getSpeedMps()
