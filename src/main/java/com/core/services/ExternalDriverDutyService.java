@@ -672,7 +672,20 @@ public class ExternalDriverDutyService {
 		}
 
 		int actualDrivenKm = request.odometerKm() - entry.getStartingKM();
-		double projectedTotalKm = actualDrivenKm + garageReturn.rawDistanceKm();
+		/*
+		 * P0 display-vs-billing consistency fix -- this used to add
+		 * garageReturn.rawDistanceKm() (the precise, un-rounded figure), while
+		 * closingKM/the actual bill above are built from
+		 * garageReturn.distanceKmRoundedUp() (CEILING-rounded, since closingKM
+		 * is a whole-number odometer reading). That meant the "Projected total"
+		 * figure shown to the driver could differ from the distance the bill
+		 * was actually calculated from by up to ~1km -- exactly the "Chauffeur
+		 * says 18.0 km, backend bills 19.0 km" inconsistency this feature must
+		 * not have. Using the same rounded figure here makes the displayed
+		 * projected total always equal to (actualDrivenKm + the distance
+		 * actually billed), never a different, more-precise-looking number.
+		 */
+		double projectedTotalKm = actualDrivenKm + garageReturn.distanceKmRoundedUp();
 
 		ReturnRouteEstimate returnRoute = new ReturnRouteEstimate(
 				garageReturn.rawDistanceKm(),
