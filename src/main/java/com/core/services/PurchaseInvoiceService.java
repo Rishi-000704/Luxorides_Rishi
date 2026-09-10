@@ -79,7 +79,50 @@ public class PurchaseInvoiceService {
     @Transactional(readOnly = true)
     public List<com.core.models.Package> getPackageOptions(String vendorId, String bookingEntryId, String orgId) {
         validateVendor(orgId, vendorId);
+        return getPackageOptionsForDuty(vendorId, bookingEntryId, orgId);
+    }
 
+    /*
+     * Phase A: bulk counterpart used by the purchase-invoice draft flow's
+     * step 3 (consolidating N selected duties into one vendor invoice), which
+     * previously fired one GET .../duties/{bookingEntryId}/packages per
+     * selected duty. Validates the vendor exactly once (not once per duty,
+     * unlike N separate calls to the single-duty method above would), then
+     * reuses the exact same per-duty validation/lookup as the single-duty
+     * endpoint for each requested duty. A duty that fails its own validation
+     * (already invoiced, wrong vendor, missing package snapshot, etc.) is
+     * reported per-entry rather than aborting the whole batch, matching how
+     * the existing per-duty frontend calls already fail independently of
+     * each other.
+     */
+    @Transactional(readOnly = true)
+    public List<PurchasePackageOptionsForDuty> getPackageOptionsForDuties(
+            String vendorId, List<String> bookingEntryIds, String orgId) {
+        validateVendor(orgId, vendorId);
+
+        List<PurchasePackageOptionsForDuty> results = new ArrayList<>();
+        for (String bookingEntryId : bookingEntryIds) {
+            try {
+                results.add(new PurchasePackageOptionsForDuty(
+                        bookingEntryId,
+                        getPackageOptionsForDuty(vendorId, bookingEntryId, orgId),
+                        null
+                ));
+            } catch (BusinessException | NotFoundException e) {
+                results.add(new PurchasePackageOptionsForDuty(bookingEntryId, List.of(), e.getMessage()));
+            }
+        }
+        return results;
+    }
+
+    public record PurchasePackageOptionsForDuty(
+            String bookingEntryId,
+            List<com.core.models.Package> packages,
+            String error
+    ) {
+    }
+
+    private List<com.core.models.Package> getPackageOptionsForDuty(String vendorId, String bookingEntryId, String orgId) {
         if (purchaseInvoiceEntryRepository.existsByActiveBookingEntryId(bookingEntryId)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "Duty is already included in a purchase invoice");
         }

@@ -24,6 +24,8 @@ import com.core.dtos.purchase.CreatePurchaseInvoiceDraftCommand;
 import com.core.dtos.purchase.EligiblePurchaseDutyDTO;
 import com.core.dtos.purchase.PurchaseInvoiceDTO;
 import com.core.dtos.purchase.PurchasePackageOptionDTO;
+import com.core.dtos.purchase.PurchasePackageOptionsBulkRequest;
+import com.core.dtos.purchase.PurchasePackageOptionsForDutyDTO;
 import com.core.mapper.PurchaseInvoiceAssembler;
 import com.core.models.enums.PurchaseInvoiceStatus;
 import com.core.security.SecurityContextUtil;
@@ -65,6 +67,25 @@ public class PurchaseInvoiceController {
         return purchaseInvoiceService.getPackageOptions(vendorId, bookingEntryId, security.orgId())
                 .stream()
                 .map(assembler::packageOption)
+                .toList();
+    }
+
+    /*
+     * Phase A: bulk counterpart to the endpoint above. The purchase-invoice
+     * draft flow's step 3 selects N duties for one vendor and previously
+     * fired N separate GET .../duties/{bookingEntryId}/packages requests to
+     * load their package options -- this collapses that into one request.
+     */
+    @PostMapping("/vendors/{vendorId}/duties/packages")
+    @PreAuthorize("hasAuthority('PURCHASE_INVOICE_VIEW')")
+    public List<PurchasePackageOptionsForDutyDTO> packageOptionsBulk(
+            @PathVariable String vendorId,
+            @RequestBody PurchasePackageOptionsBulkRequest request
+    ) {
+        List<String> bookingEntryIds = request.bookingEntryIds() == null ? List.of() : request.bookingEntryIds();
+        return purchaseInvoiceService.getPackageOptionsForDuties(vendorId, bookingEntryIds, security.orgId())
+                .stream()
+                .map(assembler::packageOptionsForDuty)
                 .toList();
     }
 

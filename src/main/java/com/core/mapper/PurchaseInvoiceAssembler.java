@@ -10,6 +10,8 @@ import com.core.dtos.purchase.PaymentOutDTO;
 import com.core.dtos.purchase.PurchaseInvoiceDTO;
 import com.core.dtos.purchase.PurchaseInvoiceEntryDTO;
 import com.core.dtos.purchase.PurchasePackageOptionDTO;
+import com.core.dtos.purchase.PurchasePackageOptionsForDutyDTO;
+import com.core.services.PurchaseInvoiceService.PurchasePackageOptionsForDuty;
 import com.core.models.BookingEntry;
 import com.core.models.Client;
 import com.core.models.ClientBillingEntity;
@@ -151,6 +153,14 @@ public class PurchaseInvoiceAssembler {
                 money(pack.getNightCharge()),
                 pack.getForSales(),
                 pack.getLocation()
+        );
+    }
+
+    public PurchasePackageOptionsForDutyDTO packageOptionsForDuty(PurchasePackageOptionsForDuty result) {
+        return new PurchasePackageOptionsForDutyDTO(
+                result.bookingEntryId(),
+                result.packages().stream().map(this::packageOption).toList(),
+                result.error()
         );
     }
 
