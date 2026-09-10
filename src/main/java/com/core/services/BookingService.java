@@ -52,6 +52,8 @@ import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.models.enums.PaymentGateway;
 import com.core.models.enums.PaymentStatus;
+import com.core.models.AssignmentHistory;
+import com.core.repositories.AssignmentHistoryRepository;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.BookingRepository;
 import com.core.repositories.PackageRepository;
@@ -87,6 +89,8 @@ public class BookingService {
 	private final BookingAssembler bookingAssembler;
 
 	private final FileService fileService;
+
+	private final AssignmentHistoryRepository assignmentHistoryRepository;
 
 	/* ======================= BOOKING ================================ */
 
@@ -432,6 +436,41 @@ public class BookingService {
 		);
 
 		boolean driverChanged = !cmd.driverId().equals(entry.getDriverId());
+		boolean vehicleChanged = !java.util.Objects.equals(cmd.fleetVehicleId(), entry.getFleetVehicleId());
+
+		/*
+		 * Phase C -- preserve the previous assignment before it's overwritten
+		 * below, but only for a REAL transition. reAllotDuty only ever runs on
+		 * a duty that already went through allotDuty (ensureDutyStatus above
+		 * requires ALLOTTED/RUNNING/COMPLETED), so entry.getDriverId()/
+		 * getFleetVehicleId() are guaranteed non-null "previous" values here --
+		 * there is no null-previous edge case to handle on this path.
+		 *
+		 * Idempotency comes entirely from the existing architecture, not a new
+		 * mechanism: getBookingForUpdate() above already takes a pessimistic
+		 * lock on this booking row for the whole transaction, so two
+		 * concurrent calls (a retried request, a double-tap) can't both read
+		 * the pre-change state -- the second to acquire the lock sees the
+		 * first's already-committed update and correctly computes
+		 * driverChanged=false/vehicleChanged=false, writing no history row.
+		 * Same guarantee driverChanged already relied on above for the
+		 * OTP-clearing block; vehicleChanged reuses it too.
+		 */
+		if (driverChanged || vehicleChanged) {
+			AssignmentHistory history = new AssignmentHistory();
+			history.setOrgId(orgId);
+			history.setBookingId(booking.getBookingId());
+			history.setDutyId(entry.getDutyId());
+			history.setBookingEntry(entry);
+			history.setPreviousDriverId(entry.getDriverId());
+			history.setNewDriverId(cmd.driverId());
+			history.setPreviousFleetVehicleId(entry.getFleetVehicleId());
+			history.setNewFleetVehicleId(cmd.fleetVehicleId());
+			// No reliable reassignment reason exists in the current workflow --
+			// AllotDutyCommand carries none (grep-verified) and no reason-capture
+			// UI exists yet. Left null rather than fabricated.
+			assignmentHistoryRepository.save(history);
+		}
 
 		entry.setDriverId(cmd.driverId());
 		entry.setSupplierId(cmd.supplierId());

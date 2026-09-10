@@ -39,6 +39,7 @@ import com.core.models.embedded.Money;
 import com.core.models.enums.BookingStatus;
 import com.core.models.enums.DutyStatus;
 import com.core.models.enums.GstType;
+import com.core.repositories.AssignmentHistoryRepository;
 import com.core.repositories.BookingEntryRepository;
 import com.core.repositories.BookingRepository;
 import com.core.repositories.PackageRepository;
@@ -83,6 +84,7 @@ class BookingServiceTest {
 		eventPublisher = mock(ApplicationEventPublisher.class);
 		BookingAssembler bookingAssembler = mock(BookingAssembler.class);
 		FileService fileService = mock(FileService.class);
+		AssignmentHistoryRepository assignmentHistoryRepository = mock(AssignmentHistoryRepository.class);
 
 		service = new BookingService(
 				bookingRepository,
@@ -96,7 +98,8 @@ class BookingServiceTest {
 				refundEventAssembler,
 				eventPublisher,
 				bookingAssembler,
-				fileService
+				fileService,
+				assignmentHistoryRepository
 		);
 	}
 
