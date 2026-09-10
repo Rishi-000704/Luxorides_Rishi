@@ -1395,8 +1395,21 @@ public class ExternalDriverDutyService {
 		for (int i = 0; i < inputs.size(); i++) {
 			DriverDutyExpenseInput input = inputs.get(i);
 
+			/*
+			 * P0 financial-integrity fix -- this used to silently `continue`
+			 * (skip) an invalid amount, which meant a driver whose expense was
+			 * dropped had no idea it never counted, and the driver-app UI (which
+			 * shows the expenses it submitted) could visibly disagree with what
+			 * was actually billed. An expense the driver believes was recorded
+			 * must never silently vanish from the request -- fail the whole
+			 * submission loudly instead, exactly like every other malformed
+			 * duty-end field (see validateKm above).
+			 */
 			if (input.amount() == null || input.amount().compareTo(BigDecimal.ZERO) <= 0) {
-				continue;
+				throw new BusinessException(
+						ErrorCode.BAD_REQUEST,
+						"Expense amount must be greater than zero (index " + i + ")"
+				);
 			}
 
 			MultipartFile receipt = receiptPhotos != null && receiptPhotos.size() > i
