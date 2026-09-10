@@ -211,8 +211,10 @@ public class AuthenticationService {
 				if (attempt >= OTP_WRITE_MAX_ATTEMPTS) {
 					throw deadlock;
 				}
-				log.warn("OTP write for phone={} hit a DB lock conflict (attempt {}/{}), retrying: {}",
-						record.getPhone(), attempt, OTP_WRITE_MAX_ATTEMPTS, deadlock.getMessage());
+				// No phone number here -- traceId is already on every log line
+				// via logging.pattern.level (RequestTraceFilter's MDC entry).
+				log.warn("OTP write hit a DB lock conflict (attempt {}/{}), retrying: {}",
+						attempt, OTP_WRITE_MAX_ATTEMPTS, deadlock.getMessage());
 				try {
 					Thread.sleep(50L * attempt);
 				} catch (InterruptedException interrupted) {

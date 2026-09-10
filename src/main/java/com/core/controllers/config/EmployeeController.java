@@ -73,7 +73,6 @@ public class EmployeeController {
 	@PutMapping("/users/{userId}/authorities")
 	@PreAuthorize("hasAuthority('EMPLOYEE_UPDATE_AUTHORITIES')")
 	public void updateAuthorities(@PathVariable String userId, @RequestBody List<Authority> authorities) {
-		System.out.println("Autho: "+authorities.toString());
 		this.service.updateAuthorities(security.orgId(), userId, authorities);
 	}
 
@@ -83,7 +82,6 @@ public class EmployeeController {
 		if (security.userId().equals(userId) && Boolean.FALSE.equals(enabled)) {
 			throw new AccessDeniedException("You cannot disable your own account.");
 		}
-		System.out.println("Value: "+enabled);
 		return this.service.updateUserEnabled(security.orgId(), userId, enabled);
 	}
 

@@ -82,4 +82,47 @@ class RazorpayClientFactoryTest {
 		assertThrows(SecurityException.class, () ->
 				factory.verifyWebhookSignature(credentialsWithWebhookSecret("whsec_abc"), "", "some-signature"));
 	}
+
+	/*
+	 * Checkout-order signature verification (ClientPaymentController's
+	 * /verify flow). Previously compared with plain String#equals; now uses
+	 * the same MessageDigest#isEqual constant-time comparison as
+	 * verifyWebhookSignature above -- same HMAC-SHA256 algorithm, same
+	 * "orderId|paymentId" signed payload, only the final comparison changed.
+	 * These assertions prove that behavior (accept/reject) is unchanged.
+	 */
+	@Test
+	void verifySignature_accepts_correctSignature() throws Exception {
+		String orderId = "order_abc";
+		String paymentId = "pay_xyz";
+		String signature = computeHmac("secret_test", orderId + "|" + paymentId);
+
+		assertDoesNotThrow(() ->
+				factory.verifySignature(credentialsWithWebhookSecret("whsec_abc"), orderId, paymentId, signature));
+	}
+
+	@Test
+	void verifySignature_rejects_tamperedPaymentId() throws Exception {
+		String orderId = "order_abc";
+		String signature = computeHmac("secret_test", orderId + "|" + "pay_xyz");
+
+		assertThrows(SecurityException.class, () -> factory.verifySignature(
+				credentialsWithWebhookSecret("whsec_abc"), orderId, "pay_different", signature));
+	}
+
+	@Test
+	void verifySignature_rejects_wrongKeySecret() throws Exception {
+		String orderId = "order_abc";
+		String paymentId = "pay_xyz";
+		String signature = computeHmac("some_other_secret", orderId + "|" + paymentId);
+
+		assertThrows(SecurityException.class, () -> factory.verifySignature(
+				credentialsWithWebhookSecret("whsec_abc"), orderId, paymentId, signature));
+	}
+
+	@Test
+	void verifySignature_rejects_missingFields() {
+		assertThrows(SecurityException.class, () ->
+				factory.verifySignature(credentialsWithWebhookSecret("whsec_abc"), null, "pay_xyz", "sig"));
+	}
 }

@@ -1,5 +1,6 @@
 package com.core.location.provider;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -42,6 +43,9 @@ public class GoogleGeoProvider implements GeoProvider {
 	 */
 	@Value("${google.airport.radius-meters:5000}")
 	private int airportRadiusMeters;
+
+	@Value("${geo.http.response-timeout-ms}")
+	private long responseTimeoutMs;
 
 	@Override
 	public String getName() {
@@ -299,6 +303,11 @@ public class GoogleGeoProvider implements GeoProvider {
 						.bodyToMono(
 								GoogleDistanceMatrixResponse.class
 						)
+						// Bounds the whole request/response wait -- a hung
+						// Google Distance Matrix call must fail fast enough
+						// for GeoProviderChain to fall through to Haversine
+						// rather than hang indefinitely.
+						.timeout(Duration.ofMillis(responseTimeoutMs))
 						.block();
 
 		validateDistanceMatrixResponse(

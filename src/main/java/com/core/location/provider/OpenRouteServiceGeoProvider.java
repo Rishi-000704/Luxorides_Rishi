@@ -1,5 +1,6 @@
 package com.core.location.provider;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 
@@ -37,6 +38,9 @@ public class OpenRouteServiceGeoProvider implements GeoProvider {
 
 	@Value("${ors.api-key}")
 	private String apiKey;
+
+	@Value("${geo.http.response-timeout-ms}")
+	private long responseTimeoutMs;
 
 	@Override
 	public String getName() {
@@ -91,6 +95,10 @@ public class OpenRouteServiceGeoProvider implements GeoProvider {
 						.header("Authorization", apiKey)
 						.retrieve()
 						.bodyToMono(OrsDirectionsResponse.class)
+						// Bounds the whole request/response wait -- a hung ORS
+						// call must fail fast enough for GeoProviderChain to
+						// fall through to Google rather than hang indefinitely.
+						.timeout(Duration.ofMillis(responseTimeoutMs))
 						.block();
 
 		validateResponse(response, start, end);

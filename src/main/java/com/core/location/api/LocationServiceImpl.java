@@ -18,10 +18,7 @@ public class LocationServiceImpl implements LocationService {
 
 	@Override
 	public boolean isAirport(AddressSnapshot address) {
-//		return chain.isAirport(address);
-		boolean b = chain.isAirport(address);
-		System.out.println(address + " is airport :"+b);
-		return b;
+		return chain.isAirport(address);
 	}
 
 	/*

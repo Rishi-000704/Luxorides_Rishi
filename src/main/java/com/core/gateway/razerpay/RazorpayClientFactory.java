@@ -104,11 +104,11 @@ public class RazorpayClientFactory {
                 "HmacSHA256"
         ));
 
-        String expected = HexFormat.of().formatHex(
+        byte[] expected = HexFormat.of().formatHex(
                 mac.doFinal(payload.getBytes(StandardCharsets.UTF_8))
-        );
+        ).getBytes(StandardCharsets.UTF_8);
 
-        if (!expected.equals(signature)) {
+        if (!java.security.MessageDigest.isEqual(expected, signature.getBytes(StandardCharsets.UTF_8))) {
             throw new SecurityException("Invalid Razorpay signature");
         }
     }

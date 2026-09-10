@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -147,7 +148,11 @@ public class ExternalDriverDutyService {
 	private final PaymentRepository paymentRepo;
 	private final PaymentEventAssembler paymentEventAssembler;
 
-	private String driverDutyPublicUrl = "https://sandbox.fleetovo.com/extrenal";
+	// Required, no default -- see driver.duty.public-url in application.properties.
+	// A deployment that forgets to configure this fails to start rather than
+	// silently sending drivers a sandbox link in production.
+	@Value("${driver.duty.public-url}")
+	private String driverDutyPublicUrl;
 
 	private static final String DRIVER_DUTY_CASH_CONTEXT = "DRIVER_DUTY_CASH";
 

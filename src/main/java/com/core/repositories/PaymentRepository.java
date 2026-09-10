@@ -25,6 +25,16 @@ public interface PaymentRepository
 			String id,
 			String orgId);
 
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("""
+			select p
+			from Payment p
+			where p.id = :id
+			""")
+	Optional<Payment> lockById(
+			@Param("id")
+			String id);
+
 	Optional<Payment> findByGatewayOrderId(
 			String gatewayOrderId);
 

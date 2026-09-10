@@ -1034,7 +1034,17 @@ public class RazorpayPaymentService {
 
 	private void confirmQrPayment(Payment payment, JSONObject razorpayPayment) {
 
-		if (payment.getStatus() == PaymentStatus.CONFIRMED) {
+		// Row lock first -- this method is reachable concurrently from both
+		// the driver app's own QR-status polling and DutyPaymentReconciliationJob's
+		// scheduled poll (see isPaidByQR). Previously the status check/mutation
+		// below ran unlocked, relying solely on the uk_payment_gateway_payment_id
+		// DB unique constraint as a backstop. Locking here brings this path in
+		// line with verifyPayment/reconcileByGatewayOrderId, which already lock
+		// before checking status. Same persistence context as isPaidByQR, so this
+		// resolves to the same managed entity as `payment` -- not a second copy.
+		Payment locked = paymentRepo.lockById(payment.getId()).orElse(payment);
+
+		if (locked.getStatus() == PaymentStatus.CONFIRMED) {
 			return;
 		}
 
@@ -1050,14 +1060,14 @@ public class RazorpayPaymentService {
 
 		long createdAt = razorpayPayment.optLong("created_at", Instant.now().getEpochSecond());
 
-		payment.setGatewayPaymentId(razorpayPaymentId);
-		payment.setTransactionNumber(razorpayPaymentId);
-		payment.setTransactionDate(Instant.ofEpochSecond(createdAt));
-		payment.setPaymentMode(PaymentMode.UPI);
-		payment.setStatus(PaymentStatus.CONFIRMED);
-		payment.setRemarks("Driver duty QR payment confirmed through Razorpay QR fetch API");
+		locked.setGatewayPaymentId(razorpayPaymentId);
+		locked.setTransactionNumber(razorpayPaymentId);
+		locked.setTransactionDate(Instant.ofEpochSecond(createdAt));
+		locked.setPaymentMode(PaymentMode.UPI);
+		locked.setStatus(PaymentStatus.CONFIRMED);
+		locked.setRemarks("Driver duty QR payment confirmed through Razorpay QR fetch API");
 
-		Payment saved = paymentRepo.save(payment);
+		Payment saved = paymentRepo.save(locked);
 
 		Booking booking = saved.getBooking();
 
