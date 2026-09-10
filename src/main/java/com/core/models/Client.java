@@ -23,6 +23,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
+import org.hibernate.annotations.BatchSize;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -51,7 +52,15 @@ import lombok.Setter;
  *                             the dedicated vendor/supplier picker).
  * findByIdAndOrgId is not indexed separately: id is already the primary key.
  */
+/*
+ * Phase A -- @BatchSize on the class batches every lazy @ManyToOne load of
+ * a Client proxy (Booking.client among others) across the current
+ * persistence context into one "WHERE id IN (...)" query instead of one
+ * per row. This is the only valid place for it: Hibernate rejects
+ * @BatchSize on a to-one association field directly.
+ */
 @Entity
+@BatchSize(size = 100)
 @Table(name = "client", indexes = {
 		@Index(name = "idx_client_user", columnList = "user_id"),
 		@Index(name = "idx_client_phone_org", columnList = "phone, org_id"),

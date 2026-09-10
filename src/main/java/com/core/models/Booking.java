@@ -25,6 +25,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.BatchSize;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -106,6 +107,19 @@ public class Booking extends AuditableEntity {
 	})
 	private Money discount;
 
+	/*
+	 * Phase A -- BookingListItem.from() reads entries/client/clientBillingEntity
+	 * for every row of a paginated booking-list page (BookingRepository's three
+	 * search* queries), and none of those three queries can safely JOIN FETCH a
+	 * *collection* (entries) without breaking Pageable's SQL-level LIMIT/OFFSET
+	 * -- Hibernate would fall back to in-memory pagination. @BatchSize instead
+	 * batches the lazy-load of this collection across every Booking already in
+	 * the current persistence context (one page) into a single
+	 * "WHERE booking_id IN (...)" query the first time any row's entries are
+	 * touched, rather than one query per row. Query text is unchanged; this is
+	 * purely additive.
+	 */
+	@BatchSize(size = 100)
 	@OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<BookingEntry> entries = new ArrayList<BookingEntry>();
 
@@ -119,6 +133,18 @@ public class Booking extends AuditableEntity {
 	@Column(nullable = false, length = 20)
 	private BookingStatus status;
 
+	/*
+	 * Phase A -- same rationale as `entries` above (batch the per-row lazy
+	 * load of client/clientBillingEntity across a whole page into one
+	 * "WHERE id IN (...)" query each), but @BatchSize is only valid on a
+	 * collection property or an entity class, not on a @ManyToOne field
+	 * itself -- Hibernate 6.5 throws AnnotationException: "Property 'client'
+	 * may not be annotated '@BatchSize'" at EntityManagerFactory bootstrap.
+	 * The batching is declared on the Client/ClientBillingEntity classes
+	 * instead (see their own @BatchSize), which is the correct place for it
+	 * and also covers every other lazy to-one load of those two entities
+	 * elsewhere in the app, not just from Booking.
+	 */
 	@ManyToOne(fetch = FetchType.LAZY)
 	@JoinColumn(name = "clientId", referencedColumnName = "id", insertable = false, updatable = false)
 	private Client client;

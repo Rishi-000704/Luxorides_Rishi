@@ -10,12 +10,20 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import org.hibernate.annotations.BatchSize;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/*
+ * Phase A -- see Client.java for the same @BatchSize rationale: batches
+ * Booking.clientBillingEntity's lazy load (and any other lazy @ManyToOne
+ * load of this entity) across the persistence context, since @BatchSize
+ * isn't valid on the association field itself.
+ */
 @Entity
+@BatchSize(size = 100)
 @Getter
 @Setter
 @NoArgsConstructor
