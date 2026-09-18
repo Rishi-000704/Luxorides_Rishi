@@ -2,12 +2,15 @@ package com.core.services;
 
 import java.util.List;
 
+import com.core.config.CacheConfig;
 import com.core.dtos.communication.EmailProviderConfigRequest;
 import com.core.dtos.communication.EmailProviderConfigResponse;
 import com.core.models.EmailProviderConfig;
 import com.core.models.enums.EmailProviderType;
 import com.core.repositories.EmailProviderConfigRepository;
 import com.core.services.common.SecretCryptoService;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
@@ -32,7 +35,13 @@ public class EmailProviderConfigService {
         return toResponse(config, orgId);
     }
 
+    /*
+     * P1.11-followup -- an org's email config (or its secrets) must never be
+     * served stale after an admin changes it, same reasoning as the
+     * SMS/payment upserts.
+     */
     @Transactional
+    @CacheEvict(value = CacheConfig.EMAIL_PROVIDER_RUNTIME_CONFIG, key = "#orgId")
     public EmailProviderConfigResponse upsert(String orgId, EmailProviderConfigRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("Email provider config request cannot be null");
@@ -64,7 +73,21 @@ public class EmailProviderConfigService {
         return toResponse(saved, orgId);
     }
 
+    /*
+     * P1.11-followup -- backs ZohoMailService.send(), called on every one of
+     * 9 notification types (booking confirm/cancel, payment pending/
+     * confirmed, refund initiated/completed, duty allotment/re-allotment/
+     * closure/re-closure). This was the DB-secret-decryption read the
+     * cost audit found missing from the caching pass that already covered
+     * SMS and payment config -- same shape, same fix. sync=true prevents a
+     * cold-cache thundering herd the same way it does for the other two.
+     */
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.EMAIL_PROVIDER_RUNTIME_CONFIG,
+            key = "#orgId",
+            condition = "#orgId != null and !#orgId.isBlank()",
+            sync = true)
     public Optional<EmailProviderRuntimeConfig> getRuntimeConfig(String orgId) {
         if (!hasText(orgId)) {
             return Optional.empty();

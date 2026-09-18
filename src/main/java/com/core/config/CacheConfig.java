@@ -11,14 +11,20 @@ import org.springframework.context.annotation.Configuration;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 /*
- * P1.11 -- targeted cache for exactly two hot, rarely-changing per-org config
- * reads identified in the cost/latency audit: SmsProviderConfigService and
- * PaymentGatewayConfigService's getRuntimeConfig() methods, both of which
- * were hitting the DB (and decrypting several secrets) on every SMS send /
- * every payment operation, including the duty-payment reconciliation job's
- * poll. This is deliberately NOT a general-purpose @Cacheable layer across
- * the app -- only these three specific methods are annotated (see the two
- * services themselves).
+ * P1.11 -- targeted cache for hot, rarely-changing per-org config reads
+ * identified in the cost/latency audit: SmsProviderConfigService,
+ * PaymentGatewayConfigService, and EmailProviderConfigService's
+ * getRuntimeConfig() methods, all of which hit the DB (and decrypt several
+ * secrets) on every SMS send / every payment operation / every notification
+ * email, including the duty-payment reconciliation job's poll. This is
+ * deliberately NOT a general-purpose @Cacheable layer across the app -- only
+ * these specific methods are annotated (see the services themselves).
+ *
+ * Email config was added in a follow-up pass after the initial audit missed
+ * it -- ZohoMailService.send() calls getRuntimeConfig() on every one of 9
+ * notification types (booking confirm/cancel, payment pending/confirmed,
+ * refund initiated/completed, duty allotment/re-allotment/closure/
+ * re-closure), same waste shape as the SMS/payment reads already fixed.
  *
  * Caffeine (in-process, bounded, single JVM) rather than Redis: this backend
  * currently runs as a single container with no load balancer / multi-instance
@@ -41,6 +47,7 @@ public class CacheConfig {
     public static final String SMS_PROVIDER_RUNTIME_CONFIG = "smsProviderRuntimeConfig";
     public static final String PAYMENT_GATEWAY_RUNTIME_CONFIG_DEFAULT = "paymentGatewayRuntimeConfigDefault";
     public static final String PAYMENT_GATEWAY_RUNTIME_CONFIG_BY_GATEWAY = "paymentGatewayRuntimeConfigByGateway";
+    public static final String EMAIL_PROVIDER_RUNTIME_CONFIG = "emailProviderRuntimeConfig";
 
     // Bounds each cache independently -- generous for any realistic org (and
     // org+gateway pair) count, small enough to never be a memory concern.
@@ -52,7 +59,8 @@ public class CacheConfig {
         CaffeineCacheManager manager = new CaffeineCacheManager(
                 SMS_PROVIDER_RUNTIME_CONFIG,
                 PAYMENT_GATEWAY_RUNTIME_CONFIG_DEFAULT,
-                PAYMENT_GATEWAY_RUNTIME_CONFIG_BY_GATEWAY);
+                PAYMENT_GATEWAY_RUNTIME_CONFIG_BY_GATEWAY,
+                EMAIL_PROVIDER_RUNTIME_CONFIG);
 
         manager.setCaffeine(Caffeine.newBuilder()
                 .maximumSize(MAX_ENTRIES_PER_CACHE)
