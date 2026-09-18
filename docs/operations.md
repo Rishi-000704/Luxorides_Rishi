@@ -38,7 +38,12 @@ Because Docker packaging uses `-DskipTests`, CI/release automation must run test
 | `SPRING_DATASOURCE_PASSWORD` | MySQL password |
 | `FLEETOVO_SECRET_MASTER_KEY` | Encryption master key for organization provider credentials |
 | `JWT_SECRET` | JWT signing secret |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated exact frontend origins allowed to call this API. Required, no default -- the app refuses to start rather than fall back to a permissive `*`. |
+| `DRIVER_DUTY_PUBLIC_URL` | Public base URL used to build driver-duty links sent by SMS. Required, no default -- the app refuses to start rather than silently send sandbox links. |
 | `GOOGLE_MAPS_KEY` | Google Maps server API key |
+| `ORS_API_KEY` | OpenRouteService API key (distance/route fallback provider) |
+| `FILE_TOKEN_SECRET` | Optional -- signs file-access tokens; falls back to `JWT_SECRET` when unset |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | Optional -- enables Android push via FCM; push no-ops (logs only) when unset |
 
 Do not document actual secret values.
 

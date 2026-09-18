@@ -41,7 +41,9 @@ The project is Maven-based.
 ./mvnw spring-boot:run
 ```
 
-Local execution requires a MySQL database and the required application configuration. Keep credentials, JWT secrets, provider keys, and other sensitive values outside documentation, tickets, logs, and prompts. Prefer environment-based secrets for shared and production environments.
+Local execution requires a MySQL database (create an empty schema matching `SPRING_DATASOURCE_URL`; `spring.jpa.hibernate.ddl-auto=update` creates the tables on first boot) and every required environment variable from [Operations §3](docs/operations.md#3-production-configuration-contract) set -- in particular `CORS_ALLOWED_ORIGINS` and `DRIVER_DUTY_PUBLIC_URL` have no default and the app will refuse to start without them. Keep credentials, JWT secrets, provider keys, and other sensitive values outside documentation, tickets, logs, and prompts. Prefer environment-based secrets for shared and production environments.
+
+To get working demo data (an org, employee logins, a driver, a client, and a seeded duty) instead of an empty database, set `app.seed.enabled=true` (e.g. `APP_SEED_ENABLED=true`) for local runs only -- see the production warning in [Security and tenancy](docs/security-and-tenancy.md) before ever setting it outside local development. With seeding on, OTP codes and other "SMS" are logged to the console instead of sent (no real SMS provider needed locally), and a MOCK payment gateway is auto-configured so checkout/payment flows work without a real Razorpay account.
 
 ## Documentation maintenance
 
