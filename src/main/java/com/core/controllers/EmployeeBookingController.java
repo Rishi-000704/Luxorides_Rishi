@@ -62,6 +62,20 @@ public class EmployeeBookingController {
 		return bookingService.reAllotDuty(cmd, security.orgId());
 	}
 
+	// Read-only availability confirmation, called by the allot/re-allot form
+	// before submit -- see BookingService#checkAvailability. Same authority
+	// as allot-duty (VIEW alone isn't enough here, since a driver/vehicle
+	// conflict's dutyId is itself allotment-adjacent information).
+	@GetMapping("/availability")
+	@PreAuthorize("hasAuthority('BOOKING_ALLOT_DUTY')")
+	public AvailabilityCheckResponse checkAvailability(
+			@RequestParam(required = false) String driverId,
+			@RequestParam(required = false) String fleetVehicleId,
+			@RequestParam(required = false) String excludeDutyId
+	) {
+		return bookingService.checkAvailability(security.orgId(), driverId, fleetVehicleId, excludeDutyId);
+	}
+
 	@PostMapping(value = "/close-duty", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	@PreAuthorize("hasAuthority('BOOKING_CLOSE_DUTY')")
 	public BookingDTO closeDuty(@ModelAttribute CloseDutyCommand cmd) {

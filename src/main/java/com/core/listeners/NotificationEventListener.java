@@ -47,6 +47,13 @@ public class NotificationEventListener {
 				: "A driver has been assigned to your trip.";
 
 		notify(event.orgId(), event.bookingId(), event.dutyId(), "Driver assigned", message, "DUTY_ALLOTTED");
+
+		if (event.driverId() != null) {
+			notificationService.create(
+					event.orgId(), NotificationRecipientType.DRIVER, event.driverId(),
+					"New duty assigned", "You've been assigned duty " + event.dutyId() + ".",
+					"DUTY_ALLOTTED", event.bookingId(), event.dutyId());
+		}
 	}
 
 	@Async

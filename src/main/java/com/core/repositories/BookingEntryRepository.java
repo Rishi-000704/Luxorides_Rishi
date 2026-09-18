@@ -65,6 +65,24 @@ public interface BookingEntryRepository extends JpaRepository<BookingEntry, Stri
 		List<DutyStatus> statuses
 	);
 
+	// Same intent as the two exists() checks above, but returns the actual
+	// conflicting duty (id + reporting time) so a caller can tell an
+	// operator *which* duty this driver/vehicle is already committed to,
+	// not just that a conflict exists. excludeEntryId lets a re-allotment
+	// check availability without the duty's own current row counting as
+	// its own conflict.
+	Optional<BookingEntry> findFirstByDriverIdAndStatusInAndIdNot(
+		String driverId,
+		List<DutyStatus> statuses,
+		String excludeEntryId
+	);
+
+	Optional<BookingEntry> findFirstByFleetVehicleIdAndStatusInAndIdNot(
+		String fleetVehicleId,
+		List<DutyStatus> statuses,
+		String excludeEntryId
+	);
+
 	/* -------------------------------------------------
 	   Driver self-service dashboard (driver/app)
 	   ------------------------------------------------- */

@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.core.dtos.booking.AllotDutyCommand;
+import com.core.dtos.booking.AvailabilityCheckResponse;
 import com.core.dtos.booking.BookingDTO;
 import com.core.dtos.booking.BookingForm;
 import com.core.dtos.booking.BookingListItem;
@@ -73,6 +74,13 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class BookingService {
+
+	// Same "busy" definition DispatchSuggestionService/DynamicPricingService
+	// already use to treat a driver/vehicle as committed -- ALLOTTED or
+	// RUNNING, not just an active GPS session. Kept in sync deliberately:
+	// this is the one other place in the codebase that reasons about
+	// driver/vehicle availability.
+	private static final List<DutyStatus> BUSY_STATUSES = List.of(DutyStatus.ALLOTTED, DutyStatus.RUNNING);
 
 	private final BookingRepository bookingRepository;
 	private final BookingEntryRepository bookingEntryRepository;
@@ -384,6 +392,51 @@ public class BookingService {
 		syncInvoiceIfGenerated(saved, orgId);
 
 		return bookingAssembler.assemble(saved);
+	}
+
+	// Real "Availability confirmation" check -- read-only, called by the ops
+	// UI before an operator submits an allotment/re-allotment, so they see a
+	// genuine conflict (which duty, at what reporting time) rather than a
+	// generic warning. Deliberately advisory, not a hard block: allotDuty/
+	// reAllotDuty don't call this themselves, since a conflict can be a
+	// legitimate override (correcting a mistaken assignment, a duty that's
+	// about to close) an operator is better positioned to judge than the
+	// backend. excludeDutyId lets a re-allotment check without the duty's
+	// own current row flagging itself as its own conflict.
+	@Transactional(readOnly = true)
+	public AvailabilityCheckResponse checkAvailability(
+			String orgId,
+			String driverId,
+			String fleetVehicleId,
+			String excludeDutyId
+	) {
+		String excludeEntryId = excludeDutyId != null
+				? bookingEntryRepository.findByDutyIdAndOrgId(excludeDutyId, orgId)
+						.map(BookingEntry::getId)
+						.orElse("")
+				: "";
+
+		BookingEntry driverConflict = driverId != null
+				? bookingEntryRepository
+						.findFirstByDriverIdAndStatusInAndIdNot(driverId, BUSY_STATUSES, excludeEntryId)
+						.orElse(null)
+				: null;
+
+		BookingEntry vehicleConflict = fleetVehicleId != null
+				? bookingEntryRepository
+						.findFirstByFleetVehicleIdAndStatusInAndIdNot(fleetVehicleId, BUSY_STATUSES, excludeEntryId)
+						.orElse(null)
+				: null;
+
+		return new AvailabilityCheckResponse(
+				driverConflict == null,
+				driverConflict != null ? driverConflict.getDutyId() : null,
+				driverConflict != null ? driverConflict.getReportingTime() : null,
+
+				vehicleConflict == null,
+				vehicleConflict != null ? vehicleConflict.getDutyId() : null,
+				vehicleConflict != null ? vehicleConflict.getReportingTime() : null
+		);
 	}
 
 	@Transactional

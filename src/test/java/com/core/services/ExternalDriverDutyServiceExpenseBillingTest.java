@@ -114,6 +114,7 @@ class ExternalDriverDutyServiceExpenseBillingTest {
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
 				mock(SMSService.class),
+				mock(DriverDocumentService.class),
 				locationService,
 				mock(ObjectProvider.class),
 				mock(PaymentRepository.class),
@@ -305,6 +306,7 @@ class ExternalDriverDutyServiceExpenseBillingTest {
 				mock(DriverDutyTokenValidator.class), mock(ApplicationEventPublisher.class),
 				mock(DriverDutyLiveLocationRepository.class), mock(DutyLocationChannelRegistry.class),
 				mock(FraudSignalService.class), new BCryptPasswordEncoder(), mock(SMSService.class),
+				mock(DriverDocumentService.class),
 				locationService, mock(ObjectProvider.class), mock(PaymentRepository.class), mock(PaymentEventAssembler.class));
 
 		DriverDutyExpenseInput toll = new DriverDutyExpenseInput(DriverDutyExpenseType.TOLL, BigDecimal.valueOf(120), "Toll");

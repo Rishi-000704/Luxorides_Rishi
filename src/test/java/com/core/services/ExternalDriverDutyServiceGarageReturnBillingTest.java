@@ -93,6 +93,7 @@ class ExternalDriverDutyServiceGarageReturnBillingTest {
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
 				mock(SMSService.class),
+				mock(DriverDocumentService.class),
 				locationService,
 				mock(ObjectProvider.class),
 				mock(PaymentRepository.class),

@@ -16,6 +16,14 @@ public final class AddressUtil {
 		return new AddressSnapshot(dto.formattedAddress(), dto.googlePlaceId(), dto.latitude(), dto.longitude());
 	}
 
+	public static AddressSnapshotDTO toAddressSnapshotDTO(AddressSnapshot entity) {
+		if (entity == null)
+			return null;
+
+		return new AddressSnapshotDTO(entity.getFormattedAddress(), entity.getGooglePlaceId(), entity.getLatitude(),
+				entity.getLongitude());
+	}
+
 	public static DisplayAddress toDisplayAddress(DisplayAddressDTO dto) {
 		if (dto == null)
 			return null;

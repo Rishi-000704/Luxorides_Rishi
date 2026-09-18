@@ -15,6 +15,7 @@ import com.core.models.DriverDutyAccessToken;
 import com.core.models.DriverDutyCheckpoint;
 import com.core.models.DriverDutyExpense;
 import com.core.models.Payment;
+import com.core.models.VehicleInspection;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.enums.DriverDutyCheckpointType;
 import com.core.models.enums.FileAccessCategory;
@@ -24,6 +25,7 @@ import com.core.repositories.DriverDutyAccessTokenRepository;
 import com.core.repositories.DriverDutyCheckpointRepository;
 import com.core.repositories.DriverDutyExpenseRepository;
 import com.core.repositories.PaymentRepository;
+import com.core.repositories.VehicleInspectionRepository;
 import com.core.services.common.FileAccessTokenService;
 
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ public class EmployeeDriverDutySubmissionService {
 	private final DriverDutyExpenseRepository expenseRepository;
 	private final DriverDutyAccessTokenRepository tokenRepository;
 	private final PaymentRepository paymentRepository;
+	private final VehicleInspectionRepository vehicleInspectionRepository;
 	private final FileAccessTokenService fileAccessTokenService;
 
 	@Transactional(readOnly = true)
@@ -90,6 +93,10 @@ public class EmployeeDriverDutySubmissionService {
 		BigDecimal bookingTotal = amount(entry.getBooking().getTotal());
 		BigDecimal amountToCollect = calculatePendingAmount(entry.getBooking());
 
+		VehicleInspection inspection = vehicleInspectionRepository
+				.findByDutyIdAndOrgId(dutyId, orgId)
+				.orElse(null);
+
 		return new DriverDutySubmissionViewResponse(
 				entry.getBooking().getBookingId(),
 				entry.getDutyId(),
@@ -112,7 +119,43 @@ public class EmployeeDriverDutySubmissionService {
 						amountToCollect
 				),
 
-				toPaymentView(payment)
+				toPaymentView(payment),
+
+				toInspectionView(inspection, orgId)
+		);
+	}
+
+	private DriverDutySubmissionViewResponse.InspectionSubmission toInspectionView(
+			VehicleInspection inspection,
+			String orgId
+	) {
+		if (inspection == null) {
+			return null;
+		}
+
+		return new DriverDutySubmissionViewResponse.InspectionSubmission(
+				fileUrl(inspection.getUniformSelfiePhoto(), orgId),
+
+				fileUrl(inspection.getExteriorFrontPhoto(), orgId),
+				fileUrl(inspection.getExteriorBackPhoto(), orgId),
+				fileUrl(inspection.getExteriorLeftPhoto(), orgId),
+				fileUrl(inspection.getExteriorRightPhoto(), orgId),
+
+				fileUrl(inspection.getInteriorDashboardPhoto(), orgId),
+				fileUrl(inspection.getInteriorFrontSeatsPhoto(), orgId),
+				fileUrl(inspection.getInteriorBackSeatsPhoto(), orgId),
+				fileUrl(inspection.getInteriorBootSpacePhoto(), orgId),
+
+				inspection.getExteriorCondition(),
+				inspection.getInteriorCondition(),
+				inspection.getDamageNotes(),
+				inspection.getCleanliness(),
+				inspection.getTyreCondition(),
+				inspection.getLightsCondition(),
+				inspection.getFuelLevel(),
+
+				inspection.isDriverConfirmed(),
+				inspection.getSubmittedAt()
 		);
 	}
 

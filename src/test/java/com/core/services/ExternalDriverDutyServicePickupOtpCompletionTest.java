@@ -99,6 +99,7 @@ class ExternalDriverDutyServicePickupOtpCompletionTest {
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
 				mock(SMSService.class),
+				mock(DriverDocumentService.class),
 				mock(LocationService.class),
 				mock(ObjectProvider.class),
 				mock(PaymentRepository.class),

@@ -4,14 +4,17 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
+import com.core.models.enums.CleanlinessRating;
 import com.core.models.enums.DriverDutyCheckpointStatus;
 import com.core.models.enums.DriverDutyCheckpointType;
 import com.core.models.enums.DriverDutyExpenseStatus;
 import com.core.models.enums.DriverDutyExpenseType;
 import com.core.models.enums.DriverDutyTokenStatus;
 import com.core.models.enums.DutyStatus;
+import com.core.models.enums.FuelLevel;
 import com.core.models.enums.PaymentGateway;
 import com.core.models.enums.PaymentStatus;
+import com.core.models.enums.VehicleConditionRating;
 
 public record DriverDutySubmissionViewResponse(
 		String bookingId,
@@ -27,7 +30,9 @@ public record DriverDutySubmissionViewResponse(
 
 		CompletionSummary summary,
 
-		PaymentCollection payment
+		PaymentCollection payment,
+
+		InspectionSubmission inspection
 ) {
 
 	public record LinkStatus(
@@ -94,6 +99,37 @@ public record DriverDutySubmissionViewResponse(
 			BigDecimal extraChargesTotal,
 			BigDecimal bookingTotal,
 			BigDecimal amountToCollect
+	) {}
+
+	// Uniform selfie + vehicle exterior/interior photos from Duty Readiness
+	// (VehicleInspection, submitted before startDuty mints an execution
+	// token -- see VehicleInspectionService). Surfaced here so an employee
+	// can manually compare the uniform selfie against the driver's on-file
+	// KYC photo for this specific duty, not just review it once at
+	// onboarding -- null when no inspection has been submitted for this duty.
+	public record InspectionSubmission(
+			String uniformSelfiePhotoUrl,
+
+			String exteriorFrontPhotoUrl,
+			String exteriorBackPhotoUrl,
+			String exteriorLeftPhotoUrl,
+			String exteriorRightPhotoUrl,
+
+			String interiorDashboardPhotoUrl,
+			String interiorFrontSeatsPhotoUrl,
+			String interiorBackSeatsPhotoUrl,
+			String interiorBootSpacePhotoUrl,
+
+			VehicleConditionRating exteriorCondition,
+			VehicleConditionRating interiorCondition,
+			String damageNotes,
+			CleanlinessRating cleanliness,
+			VehicleConditionRating tyreCondition,
+			VehicleConditionRating lightsCondition,
+			FuelLevel fuelLevel,
+
+			boolean driverConfirmed,
+			Instant submittedAt
 	) {}
 
 	public record PaymentCollection(

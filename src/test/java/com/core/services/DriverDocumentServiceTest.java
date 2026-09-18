@@ -24,6 +24,7 @@ import com.core.models.Driver;
 import com.core.models.enums.DocumentVerificationStatus;
 import com.core.repositories.DocumentRepository;
 import com.core.repositories.DriverRepository;
+import com.core.services.common.FileAccessTokenService;
 import com.core.services.common.FileService;
 
 /*
@@ -41,6 +42,7 @@ class DriverDocumentServiceTest {
 	private DriverRepository driverRepository;
 	private DocumentRepository documentRepository;
 	private FileService fileService;
+	private FileAccessTokenService fileAccessTokenService;
 	private DriverDocumentService service;
 
 	@BeforeEach
@@ -48,7 +50,8 @@ class DriverDocumentServiceTest {
 		driverRepository = mock(DriverRepository.class);
 		documentRepository = mock(DocumentRepository.class);
 		fileService = mock(FileService.class);
-		service = new DriverDocumentService(driverRepository, documentRepository, fileService);
+		fileAccessTokenService = mock(FileAccessTokenService.class);
+		service = new DriverDocumentService(driverRepository, documentRepository, fileService, fileAccessTokenService);
 
 		Driver driver = new Driver();
 		driver.setId(DRIVER_ID);

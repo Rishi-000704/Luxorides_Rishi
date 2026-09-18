@@ -33,6 +33,7 @@ import com.core.location.api.LocationService;
 import com.core.models.Booking;
 import com.core.models.BookingEntry;
 import com.core.models.DriverDutyAccessToken;
+import com.core.models.FleetVehicle;
 import com.core.models.embedded.AddressSnapshot;
 import com.core.models.enums.DutyStatus;
 import com.core.repositories.BookingEntryRepository;
@@ -91,6 +92,7 @@ class ExternalDriverDutyServiceRouteTest {
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
 				mock(SMSService.class),
+				mock(DriverDocumentService.class),
 				locationService,
 				mock(ObjectProvider.class),
 				mock(PaymentRepository.class),
@@ -188,6 +190,50 @@ class ExternalDriverDutyServiceRouteTest {
 		stubToken(entry);
 
 		assertThrows(BusinessException.class, () -> service.getRouteForLeg(RAW_TOKEN, "NOWHERE"));
+	}
+
+	/*
+	 * Root cause of the driver app's "Distance/ETA not available" on the
+	 * pre-duty-start screens (Home, DutyStartMap): entry.garageLocation is
+	 * only ever set inside submitStart, so before a duty starts,
+	 * resolveGarageLocation always comes back empty -- the PICKUP leg must
+	 * fall back to the allotted vehicle's own registered garage location
+	 * instead, or every duty shows "unavailable" before it starts, forever.
+	 */
+	@Test
+	void getRouteForLeg_pickupLeg_fallsBackToVehicleGarage_beforeDutyStart() {
+		BookingEntry entry = entryWithWaypoints();
+		entry.setGarageLocation(null); // pre-start: submitStart hasn't run yet
+
+		FleetVehicle vehicle = new FleetVehicle();
+		vehicle.setGarageLocation(point(28.61, 77.11));
+		entry.setAllotedVehicle(vehicle);
+
+		stubToken(entry);
+		when(locationService.calculateDistanceAndTime(any(), any()))
+				.thenReturn(new DistanceTimeResult(3.0, 400, false, "OPEN_ROUTE_SERVICE", List.of()));
+
+		DutyRouteLegResponse response = service.getRouteForLeg(RAW_TOKEN, "PICKUP");
+
+		assertTrue(response.available(), "pickup ETA should be available pre-start via the vehicle's garage location");
+		assertEquals(3.0, response.distanceKm());
+
+		ArgumentCaptor<AddressSnapshot> fromCaptor = ArgumentCaptor.forClass(AddressSnapshot.class);
+		verify(locationService).calculateDistanceAndTime(fromCaptor.capture(), any());
+		assertEquals(28.61, fromCaptor.getValue().getLatitude());
+	}
+
+	@Test
+	void getRouteForLeg_pickupLeg_stillHonestlyUnavailable_whenNoGarageAnywhere() {
+		BookingEntry entry = entryWithWaypoints();
+		entry.setGarageLocation(null);
+		entry.setAllotedVehicle(null); // no vehicle allotted yet either
+
+		stubToken(entry);
+
+		DutyRouteLegResponse response = service.getRouteForLeg(RAW_TOKEN, "PICKUP");
+
+		assertFalse(response.available());
 	}
 
 	/*
