@@ -26,6 +26,7 @@ import com.core.dtos.driverduty.CashPaymentConfirmationResponse;
 import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
+import com.core.dtos.driverduty.DriverDutyArrivalResponse;
 import com.core.dtos.driverduty.DriverDutyExpenseInput;
 import com.core.dtos.driverduty.DriverDutyLinkResponse;
 import com.core.dtos.driverduty.DriverDutyLocationPingRequest;
@@ -43,6 +44,8 @@ import com.core.dtos.driverduty.PickupOtpGenerateResponse;
 import com.core.dtos.driverduty.PickupOtpVerifyRequest;
 import com.core.dtos.driverduty.PickupOtpVerifyResponse;
 import com.core.dtos.driverduty.ReturnRouteEstimate;
+import com.core.events.DriverArrivedAtDropoffEvent;
+import com.core.events.DriverArrivedAtPickupEvent;
 import com.core.events.DutyStartedEvent;
 import com.core.events.PaymentConfirmedEvent;
 import com.core.events.assembler.PaymentEventAssembler;
@@ -118,6 +121,7 @@ public class ExternalDriverDutyService {
 	private final FraudSignalService fraudSignalService;
 	private final PasswordEncoder passwordEncoder;
 	private final SMSService smsService;
+	private final DriverDocumentService driverDocumentService;
 
 	/*
 	 * Use LocationService here instead of directly injecting GeoProvider.
@@ -299,19 +303,47 @@ public class ExternalDriverDutyService {
 	 */
 	@Transactional(readOnly = true)
 	public DutyRouteLegResponse getRouteForLeg(String rawToken, String legParam) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		return getRouteForLeg(accessToken.getBookingEntry(), legParam);
+	}
+
+	/*
+	 * Entry-based overload -- lets DriverAppService compute this same real
+	 * route/distance/ETA for a duty the authenticated driver owns, before any
+	 * execution token exists. A token is only minted at duty-start time (see
+	 * DriverAppService.issueExecutionToken/startDuty), so the pre-start
+	 * "today's duty" and duty-start screens previously had no token to call
+	 * the path above with and always showed distance/ETA as unavailable --
+	 * not because the provider chain failed, but because nothing ever asked
+	 * it. Ownership is already verified by the caller (DriverAppService's
+	 * findOwnedDuty), so no token is required here.
+	 */
+	@Transactional(readOnly = true)
+	public DutyRouteLegResponse getRouteForLeg(BookingEntry entry, String legParam) {
 		String leg = legParam == null ? "" : legParam.toUpperCase(Locale.ROOT);
 		if (!VALID_ROUTE_LEGS.contains(leg)) {
 			throw new BusinessException(ErrorCode.BAD_REQUEST, "leg must be one of PICKUP, DROP, GARAGE");
 		}
-
-		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
-		BookingEntry entry = accessToken.getBookingEntry();
 
 		AddressSnapshot from;
 		AddressSnapshot to;
 		switch (leg) {
 			case "PICKUP" -> {
 				from = resolveGarageLocation(entry);
+				if (!locationPresent(from) && entry.getAllotedVehicle() != null) {
+					/*
+					 * Pre-duty-start, resolveGarageLocation always comes back empty:
+					 * entry.garageLocation is only set inside submitStart (the
+					 * driver's real GPS at the moment they leave), and the START
+					 * checkpoint it falls back to doesn't exist yet either. Rather
+					 * than surface "unavailable" for every duty before it starts,
+					 * fall back to the allotted vehicle's own registered garage --
+					 * real, on-file data (FleetVehicle.garageLocation), just not the
+					 * driver's live position. Once the duty starts, entry.garageLocation
+					 * is set and this branch never triggers again.
+					 */
+					from = entry.getAllotedVehicle().getGarageLocation();
+				}
 				to = entry.getReportingLocation();
 			}
 			case "DROP" -> {
@@ -379,6 +411,20 @@ public class ExternalDriverDutyService {
 			throw new BusinessException(
 					ErrorCode.ACCESS_DENIED,
 					"Duty start can be submitted only after allotment"
+			);
+		}
+
+		// Hard safety gate -- the vehicle cannot actually leave the garage
+		// (this call is what transitions the duty to RUNNING and records the
+		// real departure GPS/odometer) on a driver whose licence/Aadhaar
+		// aren't both ops-verified. DriverAppService#acceptDuty checks this
+		// too, earlier, for a faster failure -- this is the one that
+		// actually can't be bypassed, since it's enforced at the token-
+		// authenticated execution endpoint itself, not just the driver app UI.
+		if (!driverDocumentService.areRequiredDocumentsVerified(accessToken.getOrgId(), entry.getDriverId())) {
+			throw new BusinessException(
+					ErrorCode.DRIVER_DOCUMENTS_NOT_VERIFIED,
+					"This driver's documents are not yet verified by operations -- duty cannot start"
 			);
 		}
 
@@ -464,6 +510,18 @@ public class ExternalDriverDutyService {
 	private static final int PICKUP_OTP_TTL_MINUTES = 10;
 	private static final int PICKUP_OTP_MAX_ATTEMPTS = 5;
 
+	/*
+	 * Mirrors AuthenticationService.OTP_RESEND_COOLDOWN_SECONDS -- same platform
+	 * standard (30s minimum between two OTPs to the same recipient), applied
+	 * here to stop a driver repeatedly tapping "resend" from triggering an
+	 * unbounded real MSG91 SMS send per tap. Kept as its own local constant
+	 * rather than shared with AuthenticationService: the two live on genuinely
+	 * different records (UserOtp-by-phone vs. BookingEntry-by-duty) and
+	 * duplicating one small constant is cheaper than coupling two otherwise
+	 * unrelated OTP flows to a shared class.
+	 */
+	private static final long PICKUP_OTP_RESEND_COOLDOWN_SECONDS = 30;
+
 	@Transactional
 	public PickupOtpGenerateResponse generatePickupOtp(String rawToken) {
 		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
@@ -480,6 +538,8 @@ public class ExternalDriverDutyService {
 			// Idempotent -- pickup was already verified, nothing left to (re)send.
 			return new PickupOtpGenerateResponse(true, 0, true);
 		}
+
+		enforcePickupOtpResendCooldown(entry);
 
 		String customerPhone = entry.getBooking().getClient() != null
 				? entry.getBooking().getClient().getPhone()
@@ -511,6 +571,34 @@ public class ExternalDriverDutyService {
 		}
 
 		return new PickupOtpGenerateResponse(true, PICKUP_OTP_TTL_MINUTES * 60, false);
+	}
+
+	/*
+	 * Server-side only -- the mobile app disabling its own resend button is
+	 * not a defense against a second real client hitting this endpoint
+	 * directly. Derived from the existing pickupOtpExpiresAt field rather than
+	 * a new "issued at" column: expiresAt is always issuedAt + TTL, so
+	 * (TTL - secondsUntilExpiry) recovers secondsSinceIssue with no schema
+	 * change. A null/expired-in-the-past expiresAt (never generated, already
+	 * expired, or cleared after a failed send / max-attempts lockout) means
+	 * there is nothing to cool down from, so generation proceeds immediately
+	 * -- matching how those cases already behave elsewhere in this flow.
+	 */
+	private void enforcePickupOtpResendCooldown(BookingEntry entry) {
+		if (entry.getPickupOtpExpiresAt() == null) {
+			return;
+		}
+
+		long secondsUntilExpiry = Duration.between(Instant.now(), entry.getPickupOtpExpiresAt()).getSeconds();
+		long secondsSinceIssue = (PICKUP_OTP_TTL_MINUTES * 60L) - secondsUntilExpiry;
+
+		if (secondsSinceIssue < PICKUP_OTP_RESEND_COOLDOWN_SECONDS) {
+			long secondsRemaining = PICKUP_OTP_RESEND_COOLDOWN_SECONDS - secondsSinceIssue;
+			throw new BusinessException(
+					ErrorCode.OTP_COOLDOWN_ACTIVE,
+					"Please wait " + secondsRemaining + " seconds before requesting another pickup OTP."
+			);
+		}
 	}
 
 	@Transactional
@@ -557,6 +645,77 @@ public class ExternalDriverDutyService {
 		bookingEntryRepository.save(entry);
 
 		return new PickupOtpVerifyResponse(true, verifiedAt);
+	}
+
+	/*
+	 * Real "I'm here" signal for the customer app -- previously the driver
+	 * app's "Arrived at Pickup" button was a purely local screen transition
+	 * with no backend call at all, so a customer with the app open (or a
+	 * shared tracking link) had no way to learn the driver had arrived short
+	 * of an actual phone call. Deliberately not a DriverDutyCheckpoint (no
+	 * odometer/photo evidence involved here) -- a plain timestamp field, same
+	 * shape as pickupOtpVerifiedAt above.
+	 */
+	@Transactional
+	public DriverDutyArrivalResponse markArrivedAtPickup(String rawToken) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.RUNNING) {
+			throw new BusinessException(
+					ErrorCode.DUTY_NOT_RUNNING,
+					"Duty must be started before it can be marked as arrived at pickup"
+			);
+		}
+
+		if (entry.getArrivedAtPickupAt() != null) {
+			// Idempotent -- a retried/duplicate tap is a no-op success.
+			return new DriverDutyArrivalResponse(true, entry.getArrivedAtPickupAt());
+		}
+
+		Instant arrivedAt = Instant.now();
+		entry.setArrivedAtPickupAt(arrivedAt);
+		bookingEntryRepository.save(entry);
+
+		eventPublisher.publishEvent(
+				new DriverArrivedAtPickupEvent(entry.getBooking().getBookingId(), entry.getDutyId(), accessToken.getOrgId()));
+
+		return new DriverDutyArrivalResponse(true, arrivedAt);
+	}
+
+	/*
+	 * Same shape as markArrivedAtPickup above, for the other end of the trip --
+	 * previously the driver app's "Arrived at Drop-off" button was also a
+	 * purely local screen transition with no backend call. RUNNING is still
+	 * the right gate: DutyStatus only leaves RUNNING when submitEnd closes the
+	 * duty out, so this call is valid anywhere between duty start and duty
+	 * end, same as the pickup checkpoint.
+	 */
+	@Transactional
+	public DriverDutyArrivalResponse markArrivedAtDropoff(String rawToken) {
+		DriverDutyAccessToken accessToken = tokenValidator.resolveValidToken(rawToken);
+		BookingEntry entry = lockEntryForDutyExecution(accessToken.getDutyId(), accessToken.getOrgId());
+
+		if (entry.getStatus() != DutyStatus.RUNNING) {
+			throw new BusinessException(
+					ErrorCode.DUTY_NOT_RUNNING,
+					"Duty must be started before it can be marked as arrived at drop-off"
+			);
+		}
+
+		if (entry.getArrivedAtDropoffAt() != null) {
+			// Idempotent -- a retried/duplicate tap is a no-op success.
+			return new DriverDutyArrivalResponse(true, entry.getArrivedAtDropoffAt());
+		}
+
+		Instant arrivedAt = Instant.now();
+		entry.setArrivedAtDropoffAt(arrivedAt);
+		bookingEntryRepository.save(entry);
+
+		eventPublisher.publishEvent(
+				new DriverArrivedAtDropoffEvent(entry.getBooking().getBookingId(), entry.getDutyId(), accessToken.getOrgId()));
+
+		return new DriverDutyArrivalResponse(true, arrivedAt);
 	}
 
 	/*

@@ -68,6 +68,7 @@ class ExternalDriverDutyServicePhase1Test {
 	private DriverDutyCheckpointRepository checkpointRepository;
 	private SMSService smsService;
 	private DriverDutyTokenValidator tokenValidator;
+	private DriverDocumentService driverDocumentService;
 	private ExternalDriverDutyService service;
 
 	@BeforeEach
@@ -76,6 +77,8 @@ class ExternalDriverDutyServicePhase1Test {
 		checkpointRepository = mock(DriverDutyCheckpointRepository.class);
 		smsService = mock(SMSService.class);
 		tokenValidator = mock(DriverDutyTokenValidator.class);
+		driverDocumentService = mock(DriverDocumentService.class);
+		when(driverDocumentService.areRequiredDocumentsVerified(anyString(), anyString())).thenReturn(true);
 
 		service = new ExternalDriverDutyService(
 				bookingEntryRepository,
@@ -95,6 +98,7 @@ class ExternalDriverDutyServicePhase1Test {
 				mock(FraudSignalService.class),
 				new BCryptPasswordEncoder(),
 				smsService,
+				driverDocumentService,
 				mock(LocationService.class),
 				mock(ObjectProvider.class),
 				mock(PaymentRepository.class),
@@ -124,7 +128,7 @@ class ExternalDriverDutyServicePhase1Test {
 	private DriverDutyAccessToken token(BookingEntry entry) {
 		DriverDutyAccessToken t = new DriverDutyAccessToken();
 		t.setOrgId(ORG_ID);
-		t.setDutyId(DUTY_ID);
+		t.setDutyId(entry.getDutyId());
 		t.setBookingEntry(entry);
 		return t;
 	}
@@ -172,6 +176,100 @@ class ExternalDriverDutyServicePhase1Test {
 
 		assertEquals(true, response.alreadyVerified());
 		verify(smsService, times(0)).sendOtp(anyString(), anyString(), anyString(), anyString());
+	}
+
+	// ---------------------------------------------------------------
+	// PICKUP OTP RESEND COOLDOWN (P1.9 -- mirrors the login-OTP cooldown;
+	// see AuthenticationService.OTP_RESEND_COOLDOWN_SECONDS)
+	// ---------------------------------------------------------------
+
+	@Test
+	void generatePickupOtp_rejectsImmediateResend_andNeverCallsSmsProviderForIt() {
+		BookingEntry entry = entry(DutyStatus.RUNNING);
+		stubLockable(entry);
+		when(tokenValidator.resolveValidToken(RAW_TOKEN)).thenReturn(token(entry));
+
+		service.generatePickupOtp(RAW_TOKEN);
+
+		BusinessException ex = assertThrows(BusinessException.class, () -> service.generatePickupOtp(RAW_TOKEN));
+		assertEquals(com.core.exception.ErrorCode.OTP_COOLDOWN_ACTIVE, ex.getErrorCode());
+
+		// The single most important cost assertion: a rejected resend must
+		// not have triggered a second real MSG91 call.
+		verify(smsService, times(1)).sendOtp(anyString(), anyString(), anyString(), anyString());
+	}
+
+	@Test
+	void generatePickupOtp_allowsResend_onceCooldownHasElapsed() {
+		BookingEntry entry = entry(DutyStatus.RUNNING);
+		// Simulate an OTP issued 31s ago: expiresAt = issuedAt + 10min TTL,
+		// i.e. now + (600 - 31)s (see ExternalDriverDutyService.PICKUP_OTP_TTL_MINUTES).
+		entry.setPickupOtpExpiresAt(Instant.now().plusSeconds(600 - 31));
+		entry.setPickupOtpHash("stale-hash");
+		stubLockable(entry);
+		when(tokenValidator.resolveValidToken(RAW_TOKEN)).thenReturn(token(entry));
+
+		PickupOtpGenerateResponse response = service.generatePickupOtp(RAW_TOKEN);
+
+		assertEquals(true, response.sent());
+		verify(smsService, times(1)).sendOtp(anyString(), anyString(), anyString(), anyString());
+	}
+
+	@Test
+	void generatePickupOtp_allowsImmediateRetry_whenPriorOtpAlreadyExpired() {
+		BookingEntry entry = entry(DutyStatus.RUNNING);
+		entry.setPickupOtpExpiresAt(Instant.now().minusSeconds(5));
+		entry.setPickupOtpHash("stale-hash");
+		stubLockable(entry);
+		when(tokenValidator.resolveValidToken(RAW_TOKEN)).thenReturn(token(entry));
+
+		PickupOtpGenerateResponse response = service.generatePickupOtp(RAW_TOKEN);
+
+		assertEquals(true, response.sent());
+		verify(smsService, times(1)).sendOtp(anyString(), anyString(), anyString(), anyString());
+	}
+
+	@Test
+	void generatePickupOtp_allowsImmediateRetry_afterAFailedSendClearedState() {
+		BookingEntry entry = entry(DutyStatus.RUNNING);
+		stubLockable(entry);
+		when(tokenValidator.resolveValidToken(RAW_TOKEN)).thenReturn(token(entry));
+		when(smsService.sendOtp(anyString(), anyString(), anyString(), anyString())).thenReturn(false, true);
+
+		assertThrows(BusinessException.class, () -> service.generatePickupOtp(RAW_TOKEN));
+		assertEquals(null, entry.getPickupOtpExpiresAt());
+
+		// A send failure clears pickupOtpExpiresAt, so the very next attempt
+		// must not be treated as a cooldown-covered resend.
+		PickupOtpGenerateResponse response = service.generatePickupOtp(RAW_TOKEN);
+		assertEquals(true, response.sent());
+	}
+
+	@Test
+	void generatePickupOtp_cooldownIsScopedPerDuty_notGlobal() {
+		BookingEntry entry = entry(DutyStatus.RUNNING);
+		stubLockable(entry);
+		when(tokenValidator.resolveValidToken(RAW_TOKEN)).thenReturn(token(entry));
+		service.generatePickupOtp(RAW_TOKEN);
+		assertThrows(BusinessException.class, () -> service.generatePickupOtp(RAW_TOKEN));
+
+		// A second, unrelated duty's own entry has never had an OTP issued,
+		// so it must not be affected by the first duty's active cooldown.
+		String otherDutyId = "duty-2";
+		String otherEntryId = "entry-2";
+		String otherRawToken = "raw-token-value-2";
+
+		BookingEntry otherEntry = entry(DutyStatus.RUNNING);
+		otherEntry.setId(otherEntryId);
+		otherEntry.setDutyId(otherDutyId);
+		when(bookingEntryRepository.findByDutyIdAndOrgId(otherDutyId, ORG_ID)).thenReturn(Optional.of(otherEntry));
+		when(bookingEntryRepository.lockById(otherEntryId)).thenReturn(Optional.of(otherEntry));
+		when(tokenValidator.resolveValidToken(otherRawToken)).thenReturn(token(otherEntry));
+
+		PickupOtpGenerateResponse response = service.generatePickupOtp(otherRawToken);
+
+		assertEquals(true, response.sent());
+		verify(smsService, times(2)).sendOtp(anyString(), anyString(), anyString(), anyString());
 	}
 
 	@Test
