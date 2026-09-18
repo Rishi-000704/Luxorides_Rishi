@@ -18,7 +18,9 @@ import com.core.services.ClientService;
 import com.core.services.PaymentGatewayConfigService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequestMapping("/client/app/payments")
 @RequiredArgsConstructor
@@ -88,13 +90,30 @@ public class ClientPaymentController {
 	 * the org's actual configured gateway is what really decides, same as it would for
 	 * any other multi-gateway setup. This is what lets a MOCK PaymentGatewayConfig row
 	 * (see DevDataSeeder) redirect local dev traffic to the dummy gateway with zero
-	 * frontend request changes. An org with no config row at all (today's default for
-	 * every org that hasn't set up payments) falls back to the client-requested
-	 * gateway, so existing/real orgs behave exactly as before this existed.
+	 * frontend request changes.
+	 *
+	 * P-hardening -- an org with no config row at all used to fall back to whatever
+	 * gateway the CLIENT requested, which meant any authenticated customer could POST
+	 * gateway=MOCK directly (bypassing the frontend, which never offers a picker) and
+	 * get MockPaymentService to mark their own booking CONFIRMED with zero real money
+	 * movement, for any org that simply hadn't configured payments yet. Payment success
+	 * must never be a client-chosen fact. An unconfigured org now always resolves to
+	 * RAZORPAY regardless of what was requested -- real orgs' frontend already only ever
+	 * requests RAZORPAY, so this changes nothing for them, while a non-RAZORPAY request
+	 * against an unconfigured org now safely fails (missing Razorpay credentials) instead
+	 * of silently succeeding for free. Only an explicit, org-scoped MOCK config row (e.g.
+	 * DevDataSeeder) can still route to MockPaymentService.
 	 */
 	private PaymentGateway resolveEffectiveGateway(PaymentGateway requested) {
 		return paymentGatewayConfigService.getRuntimeConfig(security.orgId())
 				.map(config -> config.gateway())
-				.orElse(requested);
+				.orElseGet(() -> {
+					if (requested != PaymentGateway.RAZORPAY) {
+						log.warn(
+								"Org {} has no PaymentGatewayConfig; ignoring client-requested gateway {} and defaulting to RAZORPAY",
+								security.orgId(), requested);
+					}
+					return PaymentGateway.RAZORPAY;
+				});
 	}
 }
