@@ -32,6 +32,8 @@ class WebSocketConfigTest {
 		DutyTokenHandshakeInterceptor dutyTokenHandshakeInterceptor = mock(DutyTokenHandshakeInterceptor.class);
 		CustomerDutyLocationHandshakeInterceptor customerDutyLocationHandshakeInterceptor =
 				mock(CustomerDutyLocationHandshakeInterceptor.class);
+		EmployeeBookingHandshakeInterceptor employeeBookingHandshakeInterceptor =
+				mock(EmployeeBookingHandshakeInterceptor.class);
 
 		WebSocketConfig config = new WebSocketConfig(
 				bookingStatusWebSocketHandler,
@@ -40,15 +42,19 @@ class WebSocketConfigTest {
 				customerHandshakeInterceptor,
 				dutyTokenHandshakeInterceptor,
 				customerDutyLocationHandshakeInterceptor,
+				employeeBookingHandshakeInterceptor,
 				ORIGINS_PROPERTY);
 
 		WebSocketHandlerRegistry registry = mock(WebSocketHandlerRegistry.class);
 		WebSocketHandlerRegistration bookingsRegistration = mockChainableRegistration();
+		WebSocketHandlerRegistration opsBookingsRegistration = mockChainableRegistration();
 		WebSocketHandlerRegistration paymentRegistration = mockChainableRegistration();
 		WebSocketHandlerRegistration locationRegistration = mockChainableRegistration();
 
 		when(registry.addHandler(any(WebSocketHandler.class), org.mockito.ArgumentMatchers.eq("/ws/bookings/*")))
 				.thenReturn(bookingsRegistration);
+		when(registry.addHandler(any(WebSocketHandler.class), org.mockito.ArgumentMatchers.eq("/ws/ops/bookings/*")))
+				.thenReturn(opsBookingsRegistration);
 		when(registry.addHandler(any(WebSocketHandler.class), org.mockito.ArgumentMatchers.eq("/ws/duty-payment/*")))
 				.thenReturn(paymentRegistration);
 		when(registry.addHandler(any(WebSocketHandler.class), org.mockito.ArgumentMatchers.eq("/ws/duty-location/*")))
@@ -57,8 +63,44 @@ class WebSocketConfigTest {
 		config.registerWebSocketHandlers(registry);
 
 		verify(bookingsRegistration).setAllowedOrigins(EXPECTED_ORIGINS);
+		verify(opsBookingsRegistration).setAllowedOrigins(EXPECTED_ORIGINS);
 		verify(paymentRegistration).setAllowedOrigins(EXPECTED_ORIGINS);
 		verify(locationRegistration).setAllowedOrigins(EXPECTED_ORIGINS);
+	}
+
+	// The ops channel deliberately reuses the SAME BookingStatusWebSocketHandler
+	// instance as the customer channel (see WebSocketConfig's registration
+	// comment) -- proves that reuse rather than a second, parallel handler.
+	@Test
+	void registerWebSocketHandlers_opsBookingChannel_reusesTheSameHandlerAsCustomerChannel() {
+		BookingStatusWebSocketHandler bookingStatusWebSocketHandler = mock(BookingStatusWebSocketHandler.class);
+		DutyPaymentWebSocketHandler dutyPaymentWebSocketHandler = mock(DutyPaymentWebSocketHandler.class);
+		DutyLocationWebSocketHandler dutyLocationWebSocketHandler = mock(DutyLocationWebSocketHandler.class);
+		CustomerHandshakeInterceptor customerHandshakeInterceptor = mock(CustomerHandshakeInterceptor.class);
+		DutyTokenHandshakeInterceptor dutyTokenHandshakeInterceptor = mock(DutyTokenHandshakeInterceptor.class);
+		CustomerDutyLocationHandshakeInterceptor customerDutyLocationHandshakeInterceptor =
+				mock(CustomerDutyLocationHandshakeInterceptor.class);
+		EmployeeBookingHandshakeInterceptor employeeBookingHandshakeInterceptor =
+				mock(EmployeeBookingHandshakeInterceptor.class);
+
+		WebSocketConfig config = new WebSocketConfig(
+				bookingStatusWebSocketHandler,
+				dutyPaymentWebSocketHandler,
+				dutyLocationWebSocketHandler,
+				customerHandshakeInterceptor,
+				dutyTokenHandshakeInterceptor,
+				customerDutyLocationHandshakeInterceptor,
+				employeeBookingHandshakeInterceptor,
+				ORIGINS_PROPERTY);
+
+		WebSocketHandlerRegistry registry = mock(WebSocketHandlerRegistry.class);
+		when(registry.addHandler(any(WebSocketHandler.class), org.mockito.ArgumentMatchers.anyString()))
+				.thenAnswer(invocation -> mockChainableRegistration());
+
+		config.registerWebSocketHandlers(registry);
+
+		verify(registry).addHandler(bookingStatusWebSocketHandler, "/ws/bookings/*");
+		verify(registry).addHandler(bookingStatusWebSocketHandler, "/ws/ops/bookings/*");
 	}
 
 	private WebSocketHandlerRegistration mockChainableRegistration() {

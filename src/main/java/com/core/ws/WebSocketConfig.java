@@ -10,8 +10,6 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 import com.core.config.CorsOrigins;
 
-import lombok.RequiredArgsConstructor;
-
 /*
  * Origin checking for WebSocket handshakes is separate from
  * SecurityConfiguration's corsConfigurationSource() bean -- that CORS bean
@@ -22,7 +20,6 @@ import lombok.RequiredArgsConstructor;
  */
 @Configuration
 @EnableWebSocket
-@RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketConfigurer {
 
 	private final BookingStatusWebSocketHandler bookingStatusWebSocketHandler;
@@ -31,9 +28,34 @@ public class WebSocketConfig implements WebSocketConfigurer {
 	private final CustomerHandshakeInterceptor customerHandshakeInterceptor;
 	private final DutyTokenHandshakeInterceptor dutyTokenHandshakeInterceptor;
 	private final CustomerDutyLocationHandshakeInterceptor customerDutyLocationHandshakeInterceptor;
-
-	@Value("${cors.allowed-origins}")
+	private final EmployeeBookingHandshakeInterceptor employeeBookingHandshakeInterceptor;
 	private final String corsAllowedOrigins;
+
+	// Explicit constructor instead of @RequiredArgsConstructor: Lombok doesn't
+	// copy @Value onto a generated constructor parameter (no lombok.config
+	// copyableAnnotations entry in this repo), which made Spring try to
+	// autowire a bare String bean by type and fail. @Value belongs on the
+	// constructor parameter itself here, so property resolution works;
+	// signature/order is unchanged, so existing callers (WebSocketConfigTest)
+	// are unaffected.
+	public WebSocketConfig(
+			BookingStatusWebSocketHandler bookingStatusWebSocketHandler,
+			DutyPaymentWebSocketHandler dutyPaymentWebSocketHandler,
+			DutyLocationWebSocketHandler dutyLocationWebSocketHandler,
+			CustomerHandshakeInterceptor customerHandshakeInterceptor,
+			DutyTokenHandshakeInterceptor dutyTokenHandshakeInterceptor,
+			CustomerDutyLocationHandshakeInterceptor customerDutyLocationHandshakeInterceptor,
+			EmployeeBookingHandshakeInterceptor employeeBookingHandshakeInterceptor,
+			@Value("${cors.allowed-origins}") String corsAllowedOrigins) {
+		this.bookingStatusWebSocketHandler = bookingStatusWebSocketHandler;
+		this.dutyPaymentWebSocketHandler = dutyPaymentWebSocketHandler;
+		this.dutyLocationWebSocketHandler = dutyLocationWebSocketHandler;
+		this.customerHandshakeInterceptor = customerHandshakeInterceptor;
+		this.dutyTokenHandshakeInterceptor = dutyTokenHandshakeInterceptor;
+		this.customerDutyLocationHandshakeInterceptor = customerDutyLocationHandshakeInterceptor;
+		this.employeeBookingHandshakeInterceptor = employeeBookingHandshakeInterceptor;
+		this.corsAllowedOrigins = corsAllowedOrigins;
+	}
 
 	@Override
 	public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
@@ -42,6 +64,14 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
 		registry.addHandler(bookingStatusWebSocketHandler, "/ws/bookings/*")
 				.addInterceptors(customerHandshakeInterceptor)
+				.setAllowedOrigins(allowedOriginsArray);
+
+		// Same handler + same BookingChannelRegistry as the customer channel
+		// above -- an ops session registers under the same bookingId key, so
+		// it receives the identical broadcast signal a subscribed customer
+		// would, with no separate registry/broadcast path to keep in sync.
+		registry.addHandler(bookingStatusWebSocketHandler, "/ws/ops/bookings/*")
+				.addInterceptors(employeeBookingHandshakeInterceptor)
 				.setAllowedOrigins(allowedOriginsArray);
 
 		registry.addHandler(dutyPaymentWebSocketHandler, "/ws/duty-payment/*")
