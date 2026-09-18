@@ -8,6 +8,8 @@ import com.core.events.BookingBilledEvent;
 import com.core.events.BookingCancelledEvent;
 import com.core.events.BookingCompletedEvent;
 import com.core.events.BookingConfirmedEvent;
+import com.core.events.DriverArrivedAtDropoffEvent;
+import com.core.events.DriverArrivedAtPickupEvent;
 import com.core.events.DutyAllottedEvent;
 import com.core.events.DutyClosedEvent;
 import com.core.events.DutyEntryCompletedEvent;
@@ -61,6 +63,18 @@ public class RealtimeBookingBroadcastListener {
 	@EventListener
 	public void handle(DutyStartedEvent event) {
 		registry.broadcast(event.bookingId(), "DUTY_STARTED");
+	}
+
+	@Async
+	@EventListener
+	public void handle(DriverArrivedAtPickupEvent event) {
+		registry.broadcast(event.bookingId(), "DRIVER_ARRIVED_AT_PICKUP");
+	}
+
+	@Async
+	@EventListener
+	public void handle(DriverArrivedAtDropoffEvent event) {
+		registry.broadcast(event.bookingId(), "DRIVER_ARRIVED_AT_DROPOFF");
 	}
 
 	@Async

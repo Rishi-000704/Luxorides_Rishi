@@ -16,6 +16,7 @@ import com.core.dtos.common.AddressSnapshotDTO;
 import com.core.dtos.common.DisplayAddressDTO;
 import com.core.dtos.common.MoneyDTO;
 import com.core.dtos.common.NameDTO;
+import com.core.util.AddressUtil;
 import com.core.dtos.driver.DriverDTO;
 import com.core.dtos.payment.PaymentDTO;
 import com.core.dtos.vehicle.FleetVehicleDTO;
@@ -239,9 +240,11 @@ public class BookingAssembler {
 				driver.getClientId() != null ? enrichName(driver.getClient().getName()) : null,
 				enrichName(driver.getName()), enrichName(driver.getFatherName()),
 
-				driver.getGender(), driver.getPhone(), driver.getAlternatePhone(),
+				driver.getGender(), driver.getPhone(), driver.getAlternatePhone(), driver.getEmail(),
 
 				enrichAddress(driver.getAddress()),
+				AddressUtil.toAddressSnapshotDTO(driver.getGarageLocation()),
+				driver.getExperienceYears(),
 
 				driver.getAdharNumber(), driver.getLicenseNumber(),
 				fileAccessTokenService.toAccessUrl(driver.getPic(), driver.getOrgId(), FileAccessCategory.PRIVATE),

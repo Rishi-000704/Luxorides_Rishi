@@ -105,12 +105,13 @@ public class TripShareService {
 							location.getHeadingDegrees(),
 							location.getCapturedAt(),
 							eta.distanceRemainingKm(),
-							eta.etaMinutes()
+							eta.etaMinutes(),
+							entry.getArrivedAtPickupAt()
 					);
 				})
 				.orElseGet(() -> new PublicTripStatusResponse(
 						entry.getStatus(), driverFirstName, vehicleName, vehicleNumber,
-						null, null, null, null, null, null
+						null, null, null, null, null, null, entry.getArrivedAtPickupAt()
 				));
 	}
 

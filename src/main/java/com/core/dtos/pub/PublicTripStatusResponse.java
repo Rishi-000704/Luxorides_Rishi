@@ -19,6 +19,7 @@ public record PublicTripStatusResponse(
 		Double headingDegrees,
 		Instant capturedAt,
 		Double distanceRemainingKm,
-		Double etaMinutes
+		Double etaMinutes,
+		Instant arrivedAtPickupAt
 ) {
 }

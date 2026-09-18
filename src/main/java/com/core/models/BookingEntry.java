@@ -206,4 +206,22 @@ public class BookingEntry extends AuditableEntity {
 	private Instant pickupOtpExpiresAt;
 	private Integer pickupOtpAttempts;
 	private Instant pickupOtpVerifiedAt;
+
+	/*
+	 * Real "driver has arrived at the pickup point" signal (set by
+	 * ExternalDriverDutyService.markArrivedAtPickup, called from the driver
+	 * app's PickupMapScreen). Distinct from startAt (duty left the garage) and
+	 * pickupOtpVerifiedAt (the ride itself began) -- this is the moment the
+	 * customer app should actually be told "your driver is here".
+	 */
+	private Instant arrivedAtPickupAt;
+
+	/*
+	 * Same shape as arrivedAtPickupAt, for the other end of the trip -- set by
+	 * ExternalDriverDutyService.markArrivedAtDropoff, called from the driver
+	 * app's ArrivedAtDropOffScreen. Distinct from the eventual submitEnd
+	 * (which closes out the duty with odometer/GPS evidence) -- this is just
+	 * the "we've reached the drop point" timestamp.
+	 */
+	private Instant arrivedAtDropoffAt;
 }

@@ -30,7 +30,7 @@ public record ClientBookingDTO(
 			String driverName, String driverPic, String driverGender, String driverPhone,
 			Double driverRatingAverage, Long driverRatingCount,
 
-			String reportingLocation, Instant reportingTime, Integer startingKM, Instant startAt,
+			String reportingLocation, Instant reportingTime, Integer startingKM, Instant startAt, Instant arrivedAtPickupAt,
 
 			String dropLocation, Instant dropTime, Integer closingKM, Instant endAt,
 

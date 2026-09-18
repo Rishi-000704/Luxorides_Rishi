@@ -116,7 +116,7 @@ public final class ClientBookingAssembler {
 
 				// Reporting
 				e.getReportingLocation() != null ? e.getReportingLocation().getFormattedAddress() : null,
-				e.getReportingTime(), e.getStartingKM(), e.getStartAt(),
+				e.getReportingTime(), e.getStartingKM(), e.getStartAt(), e.getArrivedAtPickupAt(),
 
 				// Drop
 				e.getDropLocation() != null ? e.getDropLocation().getFormattedAddress() : null, e.getDropTime(),

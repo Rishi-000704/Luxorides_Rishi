@@ -13,6 +13,7 @@ import com.core.models.embedded.Name;
 import com.core.models.enums.FileAccessCategory;
 import com.core.services.common.AuditActorService;
 import com.core.services.common.FileAccessTokenService;
+import com.core.util.AddressUtil;
 
 @Component
 public class DriverAssembler {
@@ -36,9 +37,11 @@ public class DriverAssembler {
 				driver.getClientId() != null ? enrichName(driver.getClient().getName()) : null,
 				enrichName(driver.getName()), enrichName(driver.getFatherName()),
 
-				driver.getGender(), driver.getPhone(), driver.getAlternatePhone(),
+				driver.getGender(), driver.getPhone(), driver.getAlternatePhone(), driver.getEmail(),
 
 				enrichAddress(driver.getAddress()),
+				AddressUtil.toAddressSnapshotDTO(driver.getGarageLocation()),
+				driver.getExperienceYears(),
 
 				driver.getAdharNumber(), driver.getLicenseNumber(),
 				fileAccessTokenService.toAccessUrl(driver.getPic(), driver.getOrgId(), FileAccessCategory.PRIVATE),

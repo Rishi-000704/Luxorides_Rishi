@@ -1,5 +1,6 @@
 package com.core.models;
 
+import com.core.models.embedded.AddressSnapshot;
 import com.core.models.embedded.AuditableEntity;
 import com.core.models.embedded.DisplayAddress;
 import com.core.models.embedded.Name;
@@ -94,8 +95,26 @@ public class Driver extends AuditableEntity {
 	@Column(length = 15)
 	@ValidPhone
 	private String alternatePhone;
+	@Column(length = 150)
+	private String email;
 	@Embedded
 	private DisplayAddress address;
+	/*
+	 * The driver's own base/departure location -- distinct from `address`
+	 * (their personal/residential address, above). Same embeddable and
+	 * column-naming convention as FleetVehicle.garageLocation /
+	 * BookingEntry.garageLocation; no `nullable = false` on the overrides
+	 * (unlike AddressSnapshot's own default on formattedAddress) since most
+	 * drivers won't have set this yet.
+	 */
+	@Embedded
+	@AttributeOverrides({
+			@AttributeOverride(name = "formattedAddress", column = @Column(name = "garage_address", length = 300)),
+			@AttributeOverride(name = "googlePlaceId", column = @Column(name = "garage_place_id", length = 100)),
+			@AttributeOverride(name = "latitude", column = @Column(name = "garage_latitude")),
+			@AttributeOverride(name = "longitude", column = @Column(name = "garage_longitude")) })
+	private AddressSnapshot garageLocation;
+	private Integer experienceYears;
 	@Column(length = 12)
 	private String adharNumber;
 	@Column(length = 20)

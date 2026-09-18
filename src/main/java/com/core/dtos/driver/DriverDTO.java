@@ -2,6 +2,7 @@ package com.core.dtos.driver;
 
 import java.time.Instant;
 
+import com.core.dtos.common.AddressSnapshotDTO;
 import com.core.dtos.common.DisplayAddressDTO;
 import com.core.dtos.common.NameDTO;
 import com.core.models.enums.OwnershipType;
@@ -13,9 +14,11 @@ public record DriverDTO(String id, String orgId, String clientId, NameDTO client
 
 		NameDTO name, NameDTO fatherName,
 
-		String gender, @ValidPhone @NotBlank String phone,@ValidPhone String alternatePhone,
+		String gender, @ValidPhone @NotBlank String phone,@ValidPhone String alternatePhone, String email,
 
 		DisplayAddressDTO address,
+		AddressSnapshotDTO garageLocation,
+		Integer experienceYears,
 
 		String adharNumber, String licenseNumber, String pic,
 

@@ -473,24 +473,24 @@ public class DevDataSeeder implements CommandLineRunner {
 
 				// ORG driver
 				new Driver(null, org.getOrgId(), null, null, new Name("Mr.", "Mahesh", "Singh"),
-						new Name("Mr.", "Suresh", "Singh"), "MALE", "+918840844028", null,
-						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null,
+						new Name("Mr.", "Suresh", "Singh"), "MALE", "+918840844028", null, null,
+						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null, null, null,
 						"DL-1420110012345", null, OwnershipType.ORG, null),
 
 				// CLIENT drivers
 				new Driver(null, org.getOrgId(), clients.get(2).getId(), null, new Name("Mr.", "Ramesh", "Prasad"),
-						new Name("Mr.", "Kumesh", "Kumar"), "MALE", "+918840844029", null,
-						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null,
+						new Name("Mr.", "Kumesh", "Kumar"), "MALE", "+918840844029", null, null,
+						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null, null, null,
 						"DL-1420110067890", null, OwnershipType.CLIENT, null),
 
 				new Driver(null, org.getOrgId(), clients.get(2).getId(), null, new Name("Mr.", "Manoj", "Bajpeyi"),
-						new Name("Mr.", "Mahaveer", "Prasad"), "MALE", "+918840844030", null,
-						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null,
+						new Name("Mr.", "Mahaveer", "Prasad"), "MALE", "+918840844030", null, null,
+						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null, null, null,
 						"DL-1420110098765", null, OwnershipType.CLIENT, null),
 
 				new Driver(null, org.getOrgId(), clients.get(1).getId(), null, new Name("Mr.", "Umakant", "Pandey"),
-						new Name("Mr.", "Umesh", "Prasad"), "MALE", "+918840844031", null,
-						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null,
+						new Name("Mr.", "Umesh", "Prasad"), "MALE", "+918840844031", null, null,
+						new DisplayAddress("Noida, UP, 201301", "Noida", "UP", "201301", "IN"), null, null, null,
 						"DL-1420110024680", null, OwnershipType.CLIENT, null)));
 	}
 

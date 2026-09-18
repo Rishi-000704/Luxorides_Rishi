@@ -1,5 +1,7 @@
 package com.core.controllers;
 
+import java.util.List;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
@@ -7,6 +9,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -15,10 +18,17 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 
+import jakarta.validation.Valid;
+
+import com.core.dtos.driver.DriverDTO;
+import com.core.dtos.driver.DriverGarageOptionDTO;
+import com.core.dtos.driver.DriverProfileUpdateRequest;
+import com.core.dtos.driver.DriverRatingSummaryResponse;
 import com.core.dtos.driverduty.DriverAppDutyTokenResponse;
 import com.core.dtos.driverduty.DriverDutyAcceptanceResponse;
 import com.core.dtos.driverduty.DriverDutyDeclineRequest;
 import com.core.dtos.driverduty.DriverDutyDeclineResponse;
+import com.core.dtos.driverduty.DutyRouteLegResponse;
 import com.core.dtos.driverduty.DutySummaryForDriverDTO;
 import com.core.dtos.driverduty.VehicleInspectionRequest;
 import com.core.dtos.driverduty.VehicleInspectionResponse;
@@ -44,6 +54,26 @@ public class DriverAppController {
 	private final VehicleInspectionService vehicleInspectionService;
 	private final SecurityContextUtil security;
 
+	@GetMapping("/profile")
+	public DriverDTO getProfile() {
+		return driverAppService.getOwnProfile(security.orgId(), security.userId());
+	}
+
+	@PutMapping("/profile")
+	public DriverDTO updateProfile(@Valid @RequestBody DriverProfileUpdateRequest request) {
+		return driverAppService.updateOwnProfile(security.orgId(), security.userId(), request);
+	}
+
+	@GetMapping("/rating")
+	public DriverRatingSummaryResponse getOwnRating() {
+		return driverAppService.getOwnRating(security.orgId(), security.userId());
+	}
+
+	@GetMapping("/garages")
+	public List<DriverGarageOptionDTO> getGarages() {
+		return driverAppService.getGarages(security.orgId());
+	}
+
 	@GetMapping("/duties/active")
 	public Page<DutySummaryForDriverDTO> getActiveDuties(Pageable pageable) {
 		return driverAppService.getActiveDuties(security.orgId(), security.userId(), pageable);
@@ -57,6 +87,11 @@ public class DriverAppController {
 	@GetMapping("/duties/{dutyId}")
 	public DutySummaryForDriverDTO getDuty(@PathVariable String dutyId) {
 		return driverAppService.getDuty(security.orgId(), security.userId(), dutyId);
+	}
+
+	@GetMapping("/duties/{dutyId}/route/{leg}")
+	public DutyRouteLegResponse getRouteForLeg(@PathVariable String dutyId, @PathVariable String leg) {
+		return driverAppService.getRouteForLeg(security.orgId(), security.userId(), dutyId, leg);
 	}
 
 	@PostMapping("/duties/{dutyId}/token")

@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.core.dtos.driverduty.CashPaymentConfirmationResponse;
 import com.core.dtos.driverduty.CloseDutyConfirmationResponse;
+import com.core.dtos.driverduty.DriverDutyArrivalResponse;
 import com.core.dtos.driverduty.DriverDutyEndRequest;
 import com.core.dtos.driverduty.DriverDutyEndResponse;
 import com.core.dtos.driverduty.DriverDutyIncidentRequest;
@@ -121,6 +122,16 @@ public class ExternalDriverDutyController {
 				getClientIp(request),
 				userAgent
 		);
+	}
+
+	@PostMapping("/{token}/arrived-at-pickup")
+	public DriverDutyArrivalResponse markArrivedAtPickup(@PathVariable String token) {
+		return externalDriverDutyService.markArrivedAtPickup(token);
+	}
+
+	@PostMapping("/{token}/arrived-at-dropoff")
+	public DriverDutyArrivalResponse markArrivedAtDropoff(@PathVariable String token) {
+		return externalDriverDutyService.markArrivedAtDropoff(token);
 	}
 
 	@PostMapping("/{token}/pickup-otp/generate")
