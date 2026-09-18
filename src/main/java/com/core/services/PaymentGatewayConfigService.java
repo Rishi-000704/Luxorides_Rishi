@@ -3,6 +3,7 @@ package com.core.services;
 import java.util.List;
 import java.util.Optional;
 
+import com.core.config.CacheConfig;
 import com.core.dtos.payment.PaymentGatewayConfigRequest;
 import com.core.dtos.payment.PaymentGatewayConfigResponse;
 import com.core.dtos.payment.PaymentGatewayRuntimeConfig;
@@ -10,6 +11,9 @@ import com.core.models.PaymentGatewayConfig;
 import com.core.models.enums.PaymentGateway;
 import com.core.repositories.PaymentGatewayConfigRepository;
 import com.core.services.common.SecretCryptoService;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,7 +50,20 @@ public class PaymentGatewayConfigService {
         return toResponse(config, orgId, resolvedGateway);
     }
 
+    /*
+     * P1.11 -- an org switching gateway (MOCK <-> RAZORPAY) or rotating a
+     * credential must never be served from a stale cache entry, so both
+     * runtime-config caches are cleared for this org on every upsert. The
+     * by-gateway cache is cleared entirely (allEntries) rather than keyed
+     * precisely by (orgId, gateway): upserts are a rare admin action, so the
+     * small extra recompute cost elsewhere is worth not hand-rolling a
+     * composite-key match against Spring's default key generator.
+     */
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(value = CacheConfig.PAYMENT_GATEWAY_RUNTIME_CONFIG_DEFAULT, key = "#orgId"),
+            @CacheEvict(value = CacheConfig.PAYMENT_GATEWAY_RUNTIME_CONFIG_BY_GATEWAY, allEntries = true)
+    })
     public PaymentGatewayConfigResponse upsert(String orgId, PaymentGatewayConfigRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("Payment gateway config request cannot be null");
@@ -76,7 +93,18 @@ public class PaymentGatewayConfigService {
         return toResponse(saved, orgId);
     }
 
+    /*
+     * P1.11 -- backs ClientPaymentController's resolveEffectiveGateway(),
+     * called on every checkout initiation and every payment verification.
+     * Cached; upsert() above evicts this org's entry immediately on any
+     * gateway/credential change.
+     */
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.PAYMENT_GATEWAY_RUNTIME_CONFIG_DEFAULT,
+            key = "#orgId",
+            condition = "#orgId != null and !#orgId.isBlank()",
+            sync = true)
     public Optional<PaymentGatewayRuntimeConfig> getRuntimeConfig(String orgId) {
         if (!hasText(orgId)) {
             return Optional.empty();
@@ -106,7 +134,19 @@ public class PaymentGatewayConfigService {
                 ));
     }
 
+    /*
+     * P1.11 -- backs RazorpayClientFactory.credentials(), called on every
+     * Razorpay operation including the duty-payment QR reconciliation job's
+     * poll (see DutyPaymentReconciliationJob). This was the specific
+     * uncached hot read the cost/latency audit flagged as most important to
+     * fix, since it sits directly on that job's per-check path. Cached;
+     * upsert() above evicts on any change.
+     */
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.PAYMENT_GATEWAY_RUNTIME_CONFIG_BY_GATEWAY,
+            condition = "#orgId != null and !#orgId.isBlank()",
+            sync = true)
     public Optional<PaymentGatewayRuntimeConfig> getRuntimeConfig(String orgId, PaymentGateway gateway) {
         if (!hasText(orgId)) {
             return Optional.empty();

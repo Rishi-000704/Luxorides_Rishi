@@ -2,12 +2,15 @@ package com.core.services;
 
 import java.util.List;
 
+import com.core.config.CacheConfig;
 import com.core.dtos.communication.SmsProviderConfigRequest;
 import com.core.dtos.communication.SmsProviderConfigResponse;
 import com.core.models.SmsProviderConfig;
 import com.core.models.enums.SmsProviderType;
 import com.core.repositories.SmsProviderConfigRepository;
 import com.core.services.common.SecretCryptoService;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
@@ -34,6 +37,7 @@ public class SmsProviderConfigService {
 
     @Transactional
     @SuppressWarnings("null")
+    @CacheEvict(value = CacheConfig.SMS_PROVIDER_RUNTIME_CONFIG, key = "#orgId")
     public SmsProviderConfigResponse upsert(String orgId, SmsProviderConfigRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("SMS provider config request cannot be null");
@@ -65,7 +69,22 @@ public class SmsProviderConfigService {
         return toResponse(saved, orgId);
     }
 
+    /*
+     * P1.11 -- called on every SMS send (see SMSService), so this is one of
+     * the hottest, most rarely-changing DB reads in the app (org config that
+     * only changes when an admin edits SMS provider settings). Cached here;
+     * upsert() above evicts this org's entry immediately on any change, so a
+     * config edit is never served stale beyond the current request.
+     * sync = true so a cold-cache stampede (many concurrent SMS sends for
+     * the same org racing the very first lookup) blocks behind one DB read
+     * instead of every concurrent caller hitting the DB independently.
+     */
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.SMS_PROVIDER_RUNTIME_CONFIG,
+            key = "#orgId",
+            condition = "#orgId != null and !#orgId.isBlank()",
+            sync = true)
     public Optional<SmsProviderRuntimeConfig> getRuntimeConfig(String orgId) {
         if (!hasText(orgId)) {
             return Optional.empty();
